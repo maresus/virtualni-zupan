@@ -1,0 +1,8 @@
+openai
+chromadb
+python-dotenv
+Flask
+requests
+PyPDF2
+python-docx
+gunicorn

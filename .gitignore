@@ -1,0 +1,15 @@
+# Lokalno okolje, ki ga ne nalagamo
+venv/
+
+# Skrivnosti in gesla
+.env
+
+# Baza podatkov (zgradi se na strežniku)
+chroma_db_prod/
+chroma_db/
+
+# Sistemske datoteke macOS
+.DS_Store
+
+# Začasne Python datoteke
+__pycache__/

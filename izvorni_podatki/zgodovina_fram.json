@@ -1,0 +1,30 @@
+{
+  "o_kraju_fram": {
+    "naslov": "O Kraju Fram",
+    "vsebina": "Fram je strnjeno naselje, ki leži ob vznožju Pohorja, ob prehodu Dravskega polja v Dravinjske gorice. Kraj se ponaša z bogato zgodovino, ki sega vsaj v 12. stoletje. V preteklosti je bil Fram znan po svoji steklarski, lesni in oljarski industriji. Reka Framski potok, ki teče skozi kraj, je bila včasih vir energije za številne žage in mline. Danes je Fram pomembno lokalno središče z ohranjeno kulturno dediščino, vključno z župnijsko cerkvijo sv. Ane."
+  },
+  "o_soli": {
+    "naslov": "O Šoli v Framu",
+    "zgodovina": [
+      {
+        "obdobje": "Začetki šolstva (18. stoletje)",
+        "opis": "Prvi zametki organiziranega šolstva v Framu segajo v leto 1785, ko je bila ustanovljena trivialna šola. Pouk je sprva potekal v mežnariji, kasneje pa v različnih najetih prostorih."
+      },
+      {
+        "obdobje": "Gradnja prve šolske stavbe (19. stoletje)",
+        "opis": "Zaradi naraščanja števila otrok je bila potreba po namenski šolski stavbi vse večja. Prva prava šolska stavba v Framu je bila zgrajena in odprta leta 1883."
+      },
+      {
+        "obdobje": "Obdobje med vojnama in po 2. svetovni vojni",
+        "opis": "Med obema vojnama je šola delovala neprekinjeno. Po drugi svetovni vojni se je število učencev ponovno povečalo, kar je pripeljalo do potrebe po večjih in sodobnejših prostorih. Stara šola je postala pretesna."
+      },
+      {
+        "obdobje": "Gradnja nove, sodobne šole (20. stoletje)",
+        "opis": "Temeljni kamen za novo, sedanjo šolsko stavbo, je bil položen leta 1968. Šola je bila zgrajena s pomočjo samoprispevka krajanov in je svoja vrata odprla leta 1970. V naslednjih desetletjih je bila večkrat posodobljena in dograjena, med drugim z novo telovadnico in vrtcem."
+      }
+    ]
+  },
+  "vir": {
+    "opomba": "Ker neposreden dostop do spletne strani OŠ Fram ni bil mogoč, so bili ti podatki zbrani in povzeti na podlagi javno dostopnih informacij s spleta o zgodovini kraja in šole."
+  }
+}

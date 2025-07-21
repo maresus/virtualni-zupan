@@ -1,0 +1,36 @@
+{
+  "postopek_vpisa": {
+    "naslov": "Informacije o vpisu v Vrtec Fram in Vrtev Rače",
+    "vpisni_rok": {
+      "naslov": "Redni vpisni rok",
+      "trajanje": "Redni vpis za novo šolsko leto običajno poteka v mesecu marcu.",
+      "objava": "Javni poziv za vpis je objavljen na spletni strani vrtca, na oglasni deski vrtca in na spletni strani Občine Rače-Fram."
+    },
+    "medletni_vpis": {
+      "naslov": "Vpis med šolskim letom",
+      "moznost": "Vpis je mogoč tudi med letom, vendar le v primeru prostih mest v posameznih oddelkih."
+    },
+    "potrebna_dokumentacija": {
+      "naslov": "Potrebni dokumenti za vpis",
+      "obrazec": "Vloga za vpis otroka v vrtec, ki je na voljo na spletni strani vrtca.",
+      "priloge": "Potrebna so dokazila za uveljavljanje znižanega plačila vrtca, ki se oddajo na pristojnem Centru za socialno delo.",
+      "zdravnisko_potrdilo": "Pred vstopom otroka v vrtec je potrebno predložiti potrdilo pediatra o zdravstvenem stanju otroka."
+    },
+    "postopek": {
+      "naslov": "Potek postopka",
+      "koraki": [
+        "Oddaja izpolnjene vloge v času vpisnega roka.",
+        "Vrtec vse vloge obravnava po končanem razpisu.",
+        "Starši so o sprejemu ali uvrstitvi na čakalni seznam pisno obveščeni.",
+        "Pred vključitvijo otroka starši z vrtcem podpišejo pogodbo o medsebojnih pravicah in obveznostih."
+      ]
+    },
+    "dan_odprtih_vrat": {
+      "naslov": "Dan odprtih vrat",
+      "opis": "Vrtec pred rednim vpisom pogosto organizira dan odprtih vrat, kjer si lahko starši in otroci ogledajo prostore in spoznajo vzgojno osebje."
+    },
+    "vir_informacij": {
+      "opomba": "Ker neposreden dostop do spletne strani ni bil mogoč, so bili podatki zbrani na podlagi javno dostopnih informacij in povzetkov s spleta. Za natančne datume in obrazce je priporočljivo obiskati uradno spletno stran vrtca ali Občine Rače-Fram."
+    }
+  }
+}
