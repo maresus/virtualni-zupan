@@ -1,40 +1,5 @@
-{
-  "dogodek": {
-    "tip": "obvestilo o smrti",
-    "naslov": "Umrl je župan Občine Rače - Fram g. Branko LEDINEK",
-    "datum_objave": "2023-02-13",
-    "vir": {
-      "avtor": "Marjetka K.",
-      "opomba": "ekonomski tehnik",
-      "referenca": "9166"
-    }
-  },
-  "oseba": {
-    "ime_priimek": "Branko LEDINEK",
-    "funkcija": "bivši župan Občine Rače - Fram",
-    "zacetek_mandata": 1997,
-    "datum_smrti": "2023-02-12"
-  },
-  "vsebina": {
-    "povzetek": "Z veliko žalostjo sporočamo, da je nenadoma umrl dolgoletni župan občine Rače - Fram, Branko LEDINEK, ki je občino uspešno vodil vse od leta 1997. V času njegovega vodenja se je občina nenehno razvijala na vseh področjih.",
-    "dosezki_projekti": [
-      "ureditev lastništva in prenova gradu Rače",
-      "komunalna in cestna infrastruktura po celotni občini",
-      "nadstandardni šoli in vrtca",
-      "žepnine za vse dijake in študente"
-    ],
-    "osebnostne_lastnosti": [
-      "odločnost",
-      "srčnost",
-      "zagnanost",
-      "dostopnost",
-      "posluh do soljudi"
-    ]
-  },
-  "zalna_knjiga": {
-    "lokacija": "Bela dvorana gradu Rače",
-    "urnik": "vsak dan od 8.00 do 15.00 ure in v sredo do 17.00 ure",
-    "konec_vpisa": "2023-02-16"
-  },
-  "zakljucek": "Njegovi družini, sorodnikom in prijateljem izrekamo iskreno in globoko sožalje."
-}
+{"text": "Obvestilo o smrti: Umrl je dolgoletni župan Občine Rače - Fram, Branko LEDINEK.", "metadata": {"vir": "Občina Rače-Fram", "datum_objave": "2023-02-13"}}
+{"text": "Branko LEDINEK, ki je umrl 12. februarja 2023, je občino Rače - Fram uspešno vodil vse od leta 1997.", "metadata": {"vir": "Občina Rače-Fram", "kategorija": "Zgodovina"}}
+{"text": "Najbolj ponosni projekti bivšega župana Branka Ledineka so bili ureditev lastništva in prenova gradu Rače, komunalna in cestna infrastruktura po celotni občini, nadstandardni šoli in vrtca ter žepnine za vse dijake in študente.", "metadata": {"vir": "Občina Rače-Fram", "kategorija": "Dosežki"}}
+{"text": "Župana Branka Ledineka so občani poznali po njegovi odločnosti, srčnosti, zagnanosti, dostopnosti in posluhu do soljudi.", "metadata": {"vir": "Občina Rače-Fram", "kategorija": "Osebnostne lastnosti"}}
+{"text": "Žalna knjiga za pokojnim županom Brankom Ledinekom se je nahajala v Beli dvorani gradu Rače do vključno četrtka, 16. februarja 2023.", "metadata": {"vir": "Občina Rače-Fram", "datum_dogodka": "2023-02-16"}}
