@@ -1,17 +1,13 @@
 import os
-import json
-import chromadb
-import requests
-import traceback
-from datetime import datetime
-from openai import OpenAI
+# ... (ostali importi) ...
 from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 
-# --- KONFIGURACIJA ---
+# --- KONFIGURACIJA ZA RENDER ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
-CHROMA_DB_PATH = os.path.join(BASE_DIR, "chroma_db_prod")
+# Pot do TRAJNEGA DISKA na Renderju (mora biti enaka kot v zgradi_bazo.py)
+CHROMA_DB_PATH = "/data/chroma_db_prod"
 COLLECTION_NAME = "obcina_race_fram_prod"
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 GENERATOR_MODEL_NAME = "gpt-4o-mini"
