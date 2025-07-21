@@ -11,7 +11,7 @@ from chromadb.utils import embedding_functions
 # --- DINAMIČNA KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
-CHROMA_DB_PATH = "/data/chroma_db"
+CHROMA_DB_PATH = os.path.join(BASE_DIR, "chroma_db_prod")
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
