@@ -11,14 +11,11 @@ from chromadb.utils import embedding_functions
 # --- KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
-# Pot do TRAJNEGA DISKA na Renderju
 CHROMA_DB_PATH = "/data/chroma_db"
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 GENERATOR_MODEL_NAME = "gpt-4o-mini"
-
-# NAP API KONFIGURACIJA
 NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
 NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks_si.json" 
 LOKACIJE_ZA_FILTER = ["Rače", "Fram", "Slivnica"]
@@ -27,39 +24,34 @@ NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 class VirtualniZupan:
     def __init__(self):
-        print("Pripravljam virtualnega župana (verzija 5.2 - z ogrevanjem)...")
+        print("Inicializacija razreda VirtualniZupan (brez nalaganja baze)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.nap_access_token = None
-        try:
-            print(f"Poskušam naložiti bazo znanja iz poti: {CHROMA_DB_PATH}")
-            openai_ef = embedding_functions.OpenAIEmbeddingFunction(api_key=os.getenv("OPENAI_API_KEY"), model_name=EMBEDDING_MODEL_NAME)
-            chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-            self.collection = chroma_client.get_collection(name=COLLECTION_NAME, embedding_function=openai_ef)
-            print(f"USPEH: Povezan z bazo znanja. V bazi je {self.collection.count()} dokumentov.")
-
-            # --- DODAN OGREVALNI KLIC ---
-            print("-> Začenjam z ogrevanjem modela (to lahko traja minuto ali dve)...")
-            self.collection.query(query_texts=["test"], n_results=1)
-            print("-> Ogrevanje modela je končano. Sistem je pripravljen.")
-            # --- KONEC OGREVALNEGA KLICA ---
-
-        except Exception as e:
-            print(f"KRITIČNA NAPAKA: Baze znanja ni mogoče naložiti. Razlog: {e}")
-            traceback.print_exc()
-        
         self.zgodovina_pogovora = []
-        if self.collection:
-            print("\nVirtualni župan je pripravljen.")
+
+    def nalozi_bazo(self):
+        """Naloži bazo znanja samo, ko je to res potrebno."""
+        if self.collection is None:
+            try:
+                print(f"Poskušam naložiti bazo znanja iz poti: {CHROMA_DB_PATH}")
+                openai_ef = embedding_functions.OpenAIEmbeddingFunction(api_key=os.getenv("OPENAI_API_KEY"), model_name=EMBEDDING_MODEL_NAME)
+                chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+                self.collection = chroma_client.get_collection(name=COLLECTION_NAME, embedding_function=openai_ef)
+                print(f"USPEH: Povezan z bazo znanja. V bazi je {self.collection.count()} dokumentov.")
+            except Exception as e:
+                print(f"KRITIČNA NAPAKA: Baze znanja ni mogoče naložiti. Razlog: {e}")
+                traceback.print_exc()
 
     def odgovori(self, uporabnikovo_vprasanje: str):
+        self.nalozi_bazo() # Zagotovimo, da je baza naložena
         if not self.collection or self.collection.count() == 0:
             return "Oprostite, zdi se, da moja baza znanja ni na voljo ali pa je prazna."
-        
+
+        # ... (preostanek funkcije odgovori ostane enak)
         print(f"1. Iščem informacije z vprašanjem: '{uporabnikovo_vprasanje}'")
         rezultati_iskanja = self.collection.query(query_texts=[uporabnikovo_vprasanje], n_results=7, include=["documents"])
         kontekst_baza = "\n\n---\n\n".join(rezultati_iskanja['documents'][0]) if rezultati_iskanja and rezultati_iskanja['documents'] else ""
-
         if not kontekst_baza:
             return "Žal o tem nimam nobenih informacij."
 
