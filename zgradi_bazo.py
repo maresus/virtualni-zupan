@@ -4,12 +4,14 @@ import chromadb
 from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 
-# --- DINAMIČNA KONFIGURACIJA ---
-# Skripta sama ugotovi, v kateri mapi se nahaja
-BASE_DIR = os.path.dirname(os.path.abspath(__file__)) 
+# --- KONFIGURACIJA ---
+# Skripta sama ugotovi, kje se nahaja, za nalaganje .env datoteke
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
+
+# Poti za delovanje na Render.com
 SOURCE_DIRECTORY = os.path.join(BASE_DIR, "izvorni_podatki")
-CHROMA_DB_PATH = "/data/chroma_db"
+CHROMA_DB_PATH = "/data/chroma_db_prod"  # To je pot do trajnega diska na Renderju
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
@@ -32,7 +34,7 @@ def robustno_sekanje(text: str, max_dolzina: int):
                 if not sentence:
                     continue
                 sentence_with_dot = sentence + "."
-                if len(current_chunk) + len(sentence_with_dot) > max_dolzina:
+                if len(current_chunk) + len(sentence_with_dot) + 1 > max_dolzina:
                     if current_chunk.strip():
                         chunks.append(current_chunk.strip())
                     current_chunk = sentence_with_dot
@@ -129,8 +131,17 @@ def zgradi_bazo():
         print("V virih ni bilo najdenih veljavnih dokumentov za obdelavo.")
         return
 
-    print(f"Najdenih {len(vsi_dokumenti)} veljavnih segmentov. Dodajam v bazo...")
-    collection.add(documents=vsi_dokumenti, metadatas=vsi_metapodatki, ids=vsi_ids)
+    print(f"Najdenih {len(vsi_dokumenti)} veljavnih segmentov. Dodajam v bazo v paketih...")
+    velikost_paketa = 100
+    for i in range(0, len(vsi_dokumenti), velikost_paketa):
+        konec = min(i + velikost_paketa, len(vsi_dokumenti))
+        print(f"  -> Dodajam paket: dokumenti od {i} do {konec}")
+        collection.add(
+            documents=vsi_dokumenti[i:konec],
+            metadatas=vsi_metapodatki[i:konec],
+            ids=vsi_ids[i:konec]
+        )
+
     print(f"\nGradnja baze znanja je končana! V kolekciji '{COLLECTION_NAME}' je sedaj {collection.count()} dokumentov.")
 
 if __name__ == "__main__":
