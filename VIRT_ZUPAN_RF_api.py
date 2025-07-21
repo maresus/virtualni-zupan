@@ -11,6 +11,7 @@ from chromadb.utils import embedding_functions
 # --- KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
+# Pot do TRAJNEGA DISKA na Renderju
 CHROMA_DB_PATH = "/data/chroma_db"
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
@@ -26,7 +27,7 @@ NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 class VirtualniZupan:
     def __init__(self):
-        print("Pripravljam virtualnega župana...")
+        print("Pripravljam virtualnega župana (verzija 5.2 - z ogrevanjem)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.nap_access_token = None
@@ -36,10 +37,17 @@ class VirtualniZupan:
             chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
             self.collection = chroma_client.get_collection(name=COLLECTION_NAME, embedding_function=openai_ef)
             print(f"USPEH: Povezan z bazo znanja. V bazi je {self.collection.count()} dokumentov.")
+
+            # --- DODAN OGREVALNI KLIC ---
+            print("-> Začenjam z ogrevanjem modela (to lahko traja minuto ali dve)...")
+            self.collection.query(query_texts=["test"], n_results=1)
+            print("-> Ogrevanje modela je končano. Sistem je pripravljen.")
+            # --- KONEC OGREVALNEGA KLICA ---
+
         except Exception as e:
             print(f"KRITIČNA NAPAKA: Baze znanja ni mogoče naložiti. Razlog: {e}")
             traceback.print_exc()
-
+        
         self.zgodovina_pogovora = []
         if self.collection:
             print("\nVirtualni župan je pripravljen.")
