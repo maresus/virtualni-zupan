@@ -8,7 +8,6 @@ load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 from VIRT_ZUPAN_RF_api import VirtualniZupan
 
-# --- INICIALIZACIJA APLIKACIJE ---
 app = Flask(__name__)
 
 print("Inicializacija instance virtualnega župana za spletno aplikacijo...")
@@ -27,6 +26,3 @@ def ask():
         return jsonify({'answer': 'Prosim, vnesite vprašanje.'})
     odgovor_zupana = zupan.odgovori(uporabnikovo_vprasanje)
     return jsonify({'answer': odgovor_zupana})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
