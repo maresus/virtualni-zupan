@@ -20,7 +20,7 @@ GENERATOR_MODEL_NAME = "gpt-4o-mini"
 
 # --- DODANO: Manjkajoča NAP API KONFIGURACIJA ---
 NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
-NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks_si.json" 
+NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks.geojson.sl_SI" # PRAVILEN URL
 LOKACIJE_ZA_FILTER = ["Rače", "Fram", "Slivnica"]
 NAP_USERNAME = os.getenv("NAP_USERNAME")
 NAP_PASSWORD = os.getenv("NAP_PASSWORD")
