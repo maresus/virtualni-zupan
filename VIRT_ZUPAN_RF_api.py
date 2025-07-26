@@ -3,6 +3,7 @@ import json
 import chromadb
 import requests
 import traceback
+import re # Uvozimo modul za čiščenje besedila
 from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -17,7 +18,6 @@ LOG_FILE_PATH = "/data/zupan_pogovori.jsonl"
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 GENERATOR_MODEL_NAME = "gpt-4o-mini"
-
 NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
 NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks.geojson.sl_SI"
 LOKACIJE_ZA_FILTER = ["Rače", "Fram", "Slivnica", "letališče", "avtocesta"]
@@ -51,7 +51,7 @@ class VirtualniZupan:
         except Exception as e:
             print(f"Napaka pri beleženju pogovora: {e}")
 
-    def pridobi_nap_zeton(self):
+    def preveri_zapore_cest(self):
         if not NAP_USERNAME or not NAP_PASSWORD: return "Dostop do prometnih informacij ni mogoč (manjkajo prijavni podatki)."
         print("-> Pridobivam nov žeton za dostop do NAP...")
         payload = {'grant_type': 'password', 'username': NAP_USERNAME, 'password': NAP_PASSWORD}
@@ -60,14 +60,9 @@ class VirtualniZupan:
             response = requests.post(NAP_TOKEN_URL, data=payload, headers=headers, timeout=15)
             response.raise_for_status()
             self.nap_access_token = response.json().get('access_token')
-            return True if self.nap_access_token else "Dostop do prometnih informacij ni uspel (ni bilo mogoče pridobiti žetona)."
+            if not self.nap_access_token: return "Dostop do prometnih informacij ni uspel (ni bilo mogoče pridobiti žetona)."
         except requests.exceptions.RequestException as e:
             return f"Napaka pri pridobivanju žetona: {e}"
-
-    def preveri_zapore_cest(self):
-        if not self.nap_access_token:
-            rezultat_pridobivanja_zetona = self.pridobi_nap_zeton()
-            if rezultat_pridobivanja_zetona is not True: return rezultat_pridobivanja_zetona
 
         print("-> Pridobivam podatke o zaporah cest...")
         headers = {'Authorization': f'Bearer {self.nap_access_token}'}
@@ -75,6 +70,7 @@ class VirtualniZupan:
             data_response = requests.get(NAP_DATA_URL, headers=headers, timeout=15)
             data_response.raise_for_status()
             vsi_dogodki = data_response.json()
+            
             relevantne_zapore = [
                 dogodek['properties']
                 for dogodek in vsi_dogodki.get('features', [])
@@ -102,16 +98,17 @@ class VirtualniZupan:
             self.zgodovina_seje[session_id] = []
         zgodovina_za_prompt = "\n".join([f"Uporabnik: {q}\nŽupan: {a}" for q, a in self.zgodovina_seje[session_id]])
 
-        # Iskanje po bazi poteka vedno, da imamo kontekst
-        print(f"1. Iščem informacije za vprašanje: '{uporabnikovo_vprasanje}'")
-        rezultati_iskanja = self.collection.query(query_texts=[uporabnikovo_vprasanje], n_results=7, include=["documents", "metadatas"])
-        kontekst_baza = "\n\n---\n\n".join([f"VIR: {m.get('source', 'Neznan')}\nPOVEZAVA: {m.get('source_url', 'Brez')}\nVSEBINA: {d}" for d, m in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0])]) if rezultati_iskanja and rezultati_iskanja['documents'] else ""
-
-        # Preverimo, ali gre za vprašanje o prometu
+        # Preverjanje prometa
         spletni_kontekst = ""
         kljucne_besede_promet = ["zapora", "ceste", "promet", "stanje na cestah", "dela na cesti"]
         if any(beseda in uporabnikovo_vprasanje.lower() for beseda in kljucne_besede_promet):
             spletni_kontekst = self.preveri_zapore_cest()
+
+        # Iskanje po bazi
+        ocisceno_vprasanje = re.sub(r'[^\w\s]', '', uporabnikovo_vprasanje).lower()
+        print(f"1. Iščem informacije za normalizirano vprašanje: '{ocisceno_vprasanje}'")
+        rezultati_iskanja = self.collection.query(query_texts=[ocisceno_vprasanje], n_results=7, include=["documents", "metadatas"])
+        kontekst_baza = "\n\n---\n\n".join([f"VIR: {m.get('source', 'Neznan')}\nPOVEZAVA: {m.get('source_url', 'Brez')}\nVSEBINA: {d}" for d, m in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0])]) if rezultati_iskanja and rezultati_iskanja['documents'] else ""
 
         if not kontekst_baza and not spletni_kontekst:
             odgovor = "Žal o tem nimam nobenih informacij."
@@ -122,15 +119,17 @@ class VirtualniZupan:
         trenutno_leto = datetime.now().year
         
         prompt_za_llm = f"""
-        Ti si 'Virtualni župan občine Rače-Fram'. Bodi kratek, jedrnat in izjemno koristen.
+        Ti si 'Virtualni župan občine Rače-Fram'. Bodi kratek, jedrnat in izjemno natančen.
 
-        PRAVILO #1 (SLEDENJE POGOVORU): Upoštevaj pretekli pogovor za kontekst. Če se zadnje vprašanje ("{uporabnikovo_vprasanje}") nanaša na prejšnje teme (npr. "kaj pa njegova telefonska številka?"), moraš pravilno povezati kontekst.
+        PRAVILO #1 (SLEDENJE POGOVORU): Pretekli pogovor je ključen za kontekst. Če se zadnje vprašanje ("{uporabnikovo_vprasanje}") nanaša na osebo ali temo iz prejšnjega odgovora (npr. "kaj pa njegova telefonska?"), MORAŠ pravilno povezati kontekst.
 
-        PRAVILO #2 (DATUMI): Danes je leto {trenutno_leto}. Vedno preveri datume v priloženih informacijah. Če najdeš podatek iz preteklega leta, MORAŠ JASNO povedati, iz katerega leta je informacija (npr. "Zadnja informacija, ki jo imam, je iz leta 2024..."). Nikoli ne predstavljaj starih podatkov kot aktualne.
+        PRAVILO #2 (NATANČNOST): Odgovori samo na podlagi priloženih informacij. Če te vprašajo za telefonsko številko Gregorja Ovnika, poišči podatek, ki je neposredno vezan na njegovo ime. Ne ugibaj in ne povezuj podatkov različnih oseb.
 
-        PRAVILO #3 (POVEZAVE): Če v informacijah najdeš spletno povezavo (URL), ki se nanaša na vprašanje, jo VEDNO vključi v odgovor v obliki [Ime povezave](URL). Povezave ponudi samo, če so neposredno relevantne za odgovor.
+        PRAVILO #3 (PROMET): Če so na voljo SVEŽE INFORMACIJE O PROMETU, jih vedno predstavi najprej, nato pa lahko dodaš še informacije o načrtovanih delih iz interne baze, a jasno loči med obojim.
 
-        PRAVILO #4 (PROMET): Če so na voljo SVEŽE INFORMACIJE O PROMETU, jih vedno predstavi najprej, nato pa lahko dodaš še informacije o načrtovanih delih iz interne baze.
+        PRAVILO #4 (DATUMI): Danes je leto {trenutno_leto}. Vedno preveri datume v priloženih informacijah. Če najdeš podatek iz preteklega leta, MORAŠ JASNO povedati, iz katerega leta je informacija (npr. "Zadnja informacija, ki jo imam, je iz leta 2024..."). Nikoli ne predstavljaj starih podatkov kot aktualne.
+
+        PRAVILO #5 (POVEZAVE): Če v informacijah najdeš spletno povezavo (URL), ki se nanaša na vprašanje, jo VEDNO vključi v odgovor v obliki [Ime povezave](URL). Povezave ponudi samo, če so neposredno relevantne za odgovor (npr. pri vlogah in obrazcih).
 
         --- ZGODOVINA POGOVORA ---
         {zgodovina_za_prompt}
@@ -156,19 +155,3 @@ class VirtualniZupan:
         
         self.belezi_pogovor(session_id, uporabnikovo_vprasanje, koncni_odgovor)
         return koncni_odgovor
-
-# Glavna zanka za lokalno testiranje ostane enaka
-if __name__ == "__main__":
-    zupan = VirtualniZupan()
-    if zupan.collection:
-        session_id_za_test = "terminal_pogovor_123"
-        while True:
-            vprasanje = input("\nVi: ")
-            if vprasanje.lower() in ["konec", "adijo", "exit"]:
-                print("Hvala za pogovor. Nasvidenje!")
-                break
-            if not vprasanje.strip():
-                print("Župan: Prosim, vnesite vprašanje.")
-                continue
-            odgovor = zupan.odgovori(vprasanje, session_id=session_id_za_test)
-            print(f"Župan: {odgovor}")
