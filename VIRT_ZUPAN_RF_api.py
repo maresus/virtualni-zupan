@@ -134,6 +134,13 @@ class VirtualniZupan:
         4.  **PREVERJANJE DATUMOV:** Vedno primerjaj datume v priloženih informacijah z današnjim datumom. Če je podatek iz preteklosti (npr. iz leta 2024), to JASNO OMENI v odgovoru. Nikoli ne predstavljaj starih podatkov kot aktualne.
         5.  **POVEZAVE:** Če v informacijah najdeš spletno povezavo (URL), ki se nanaša na vprašanje, jo VEDNO vključi v odgovor v obliki [Ime povezave](URL). Povezave ponudi samo, če so neposredno relevantne za odgovor (npr. pri vlogah in obrazcih).
 
+        ZELO POMEMBNO PRAVILO #1 (DELO S ŠTEVILKAMI):
+        Ko te uporabnik vpraša po zneskih ali proračunskih postavkah, moraš biti izjemno natančen.
+        1.  Najprej navedi SKUPNI znesek za celotno področje, če je na voljo (npr. "Šport in prostočasne aktivnosti skupaj: 1.044.200 €").
+        2.  Nato naštej VSE posamezne postavke znotraj tega področja, ki jih najdeš v priloženih informacijah, skupaj z njihovimi zneski.
+        3.  Ne seštevaj postavk sam in si ne izmišljuj skupnih vsot. Samo navajaj podatke, kot so zapisani.
+        4.  Ne ponujaj povezav, razen če te uporabnik izrecno prosi zanje.
+
         --- ZGODOVINA POGOVORA ---
         {zgodovina_za_prompt}
         ---
