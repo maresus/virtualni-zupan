@@ -1,0 +1,69 @@
+{
+  "polni naziv": {
+    "vrednost": "Občina Rače – Fram",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "matična številka": {
+    "vrednost": "5883611000",
+    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
+  },
+  "davčna številka": {
+    "vrednost": "SI99967079",
+    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
+  },
+  "naslov občine": {
+    "vrednost": "Grajski trg 14, 2327 Rače",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "župan": {
+    "vrednost": "Samo Rajšp",
+    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
+  },
+  "direktorica občinske uprave": {
+    "vrednost": "mag. Karmen Kotnik, univ. dipl. prav.",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "direktorica": {
+    "vrednost": "mag. Karmen Kotnik, univ. dipl. prav.",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "datum izvolitve župana": {
+    "vrednost": "nadomestne lokalne volitve (21.05.23)",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "uradne ure": {
+    "vrednost": "Ponedeljek: 8:00–12:00 in 13:00–15:00; Sreda: 8:00–12:00 in 13:00–17:00; Petek: 8:00–13:00",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "telefon": {
+    "vrednost": "+386 2 609 60 10",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "e-pošta": {
+    "vrednost": "obcina@race-fram.si",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "spletna stran": {
+    "vrednost": "https://www.race-fram.si",
+    "vir": "osnovni_podatki_obcine.json"
+  },
+  "vodja režijskega obrata - Gregor Ovnik": {
+    "vrednost": "Gregor Ovnik, dipl. inž. grad. - telefonska številka 051 815 947",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "tanja kosi": {
+    "vrednost": "Višja svetovalka za okolje, kmetijstvo, turizem in civilno zaščito – tanja.kosi@race-fram.si, 02 609 60 24",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "zadolžen za turizem": {
+    "vrednost": "Za področje turizma je zadolžena višja svetovalka Tanja Kosi.",
+    "vir": "imenik_zaposlenih_in_ure.txt"
+  },
+  "cena polnjenja avtomobila": {
+    "vrednost": "0,25 EUR/kWh + štartnina 0,50 EUR; rezervacija 1,00 EUR",
+    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
+  },
+  "električne polnilnice": {
+    "vrednost": "Na lokacijah Grad Rače in DTV Partizan Fram.",
+    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
+

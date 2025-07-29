@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtualni Župan Občine Rače-Fram</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f7f6; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }
+        .chat-container { width: 100%; max-width: 600px; height: 80vh; background-color: white; box-shadow: 0 4px 15px rgba(0,0,0,0.1); border-radius: 12px; display: flex; flex-direction: column; overflow: hidden; }
+        .chat-header { background: linear-gradient(135deg, #0056b3, #003d82); color: white; padding: 15px 20px; font-size: 1.2em; text-align: center; }
+        .chat-window { flex-grow: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; }
+        .message { max-width: 80%; padding: 10px 15px; margin-bottom: 15px; border-radius: 18px; line-height: 1.4; word-wrap: break-word; }
+        .user-message { background-color: #007bff; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .bot-message { background-color: #e9eaf0; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; }
+        .input-area { display: flex; padding: 15px; border-top: 1px solid #ddd; background-color: #fff; }
+        #user-input { flex-grow: 1; border: 1px solid #ccc; border-radius: 20px; padding: 10px 15px; font-size: 1em; outline: none; }
+        #send-btn { background-color: #007bff; color: white; border: none; padding: 10px 20px; margin-left: 10px; border-radius: 20px; cursor: pointer; font-size: 1em; }
+        #send-btn:hover { background-color: #0056b3; }
+        .thinking { color: #888; font-style: italic; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">Virtualni Župan</div>
+        <div class="chat-window" id="chat-window">
+            <div class="message bot-message">Pozdravljeni! Sem virtualni župan Občine Rače-Fram. Kako vam lahko pomagam?</div>
+        </div>
+        <div class="input-area">
+            <input type="text" id="user-input" placeholder="Vnesite svoje vprašanje...">
+            <button id="send-btn">Pošlji</button>
+        </div>
+    </div>
+
+    <script>
+        const chatWindow = document.getElementById('chat-window');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+
+        function addMessage(text, sender) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'bot-message');
+            
+            if (sender === 'bot-thinking') {
+                messageElement.classList.add('bot-message', 'thinking');
+                messageElement.innerText = 'Župan razmišlja...';
+            } else {
+                messageElement.innerText = text;
+            }
+
+            chatWindow.appendChild(messageElement);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            return messageElement;
+        }
+
+        async function sendMessage() {
+            const question = userInput.value.trim();
+            if (!question) return;
+
+            addMessage(question, 'user');
+            userInput.value = '';
+            
+            const thinkingIndicator = addMessage('', 'bot-thinking');
+
+            try {
+                // Ta del pošlje vprašanje na vaš strežnik in počaka na odgovor
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question: question })
+                });
+                const data = await response.json();
+                
+                thinkingIndicator.remove(); // Odstranimo "Župan razmišlja..."
+                addMessage(data.answer, 'bot'); // Dodamo pravi odgovor
+            } catch (error) {
+                console.error('Error:', error);
+                thinkingIndicator.remove();
+                addMessage('Oprostite, prišlo je do napake pri povezavi s strežnikom.', 'bot');
+            }
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

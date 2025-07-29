@@ -1,0 +1,20 @@
+# Virtualno okolje
+venv/
+venv311/
+
+# Skrivnosti
+.env
+
+# Baza podatkov (zgradila se bo na strežniku)
+chroma_db/
+chroma_db_prod/
+
+# Datoteke operacijskega sistema Mac
+.DS_Store
+
+# Začasne Python datoteke
+__pycache__/
+
+# Aplikacije in velike datoteke
+*.app/
+*.zip
