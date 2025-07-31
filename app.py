@@ -1,11 +1,14 @@
 import os
 import uuid
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, session, send_from_directory
+from flask_cors import CORS # Nov import
 from dotenv import load_dotenv
 from VIRT_ZUPAN_RF_api import VirtualniZupan
 
 load_dotenv()
 app = Flask(__name__)
+# Dovolimo dostop z vseh domen za naš widget
+CORS(app, resources={r"/ask": {}, r"/widget.js": {}}) 
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "prosim-spremeni-to-skrivno-vrednost")
 
 ZUPAN_INSTANCE = None
@@ -20,7 +23,8 @@ def get_zupan():
 def home():
     if 'session_id' not in session:
         session['session_id'] = str(uuid.uuid4())
-    return render_template('index.html')
+    # Uporabimo novo, poenostavljeno predlogo za iframe
+    return render_template('chat_widget.html') 
 
 @app.route('/ask', methods=['POST'])
 def ask():
@@ -38,3 +42,10 @@ def ask():
     odgovor_zupana = zupan.odgovori(uporabnikovo_vprasanje, session_id=uporabnikov_id)
     
     return jsonify({'answer': odgovor_zupana})
+
+# --- DODANA NOVA POT ZA WIDGET ---
+@app.route('/widget.js')
+def serve_widget():
+    # Pošljemo našo glavno JavaScript datoteko za widget
+    return send_from_directory('static', 'widget.js')
+# ------------------------------------
