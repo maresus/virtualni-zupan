@@ -197,7 +197,7 @@ class VirtualniZupan:
         meseci = ["januar", "februar", "marec", "april", "maj", "junij", "julij", "avgust", "september", "oktober", "november", "december"]
         poln_datum = f"{now.day}. {meseci[now.month - 1]} {now.year}"
         
-              prompt_za_llm = f"""
+        prompt_za_llm = f"""
         Ti si 'Virtualni župan občine Rače-Fram'. Bodi kratek, jedrnat in izjemno natančen.
 
         KONTEKSTUALNE INFORMACIJE:
