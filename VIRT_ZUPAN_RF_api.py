@@ -2,7 +2,6 @@ import os
 import json
 import chromadb
 import requests
-import traceback
 import re
 from datetime import datetime
 from openai import OpenAI
@@ -19,13 +18,13 @@ EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 GENERATOR_MODEL_NAME = "gpt-4o-mini"
 NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
 NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks.geojson.sl_SI"
-LOKACIJE_ZA_FILTER = ["rače", "fram", "slivnica", "letališče", "avtocesta"]
+LOKACIJE_ZA_FILTER = ["rače", "fram", "slivnica", "letališče", "avtocesta", "brunšvik", "podova"]
 NAP_USERNAME = os.getenv("NAP_USERNAME")
 NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 11.0 - Stabilna in Zanesljiva)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 12.0 - Stabilna)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.nap_access_token = None
@@ -51,38 +50,64 @@ class VirtualniZupan:
             print(f"Napaka pri beleženju pogovora: {e}")
 
     def preveri_zapore_cest(self):
-        if not NAP_USERNAME or not NAP_PASSWORD: return ""
-        # ... (koda za pridobivanje podatkov ostaja enaka)
-        return "Na območju občine Rače-Fram po podatkih NAP trenutno ni zabeleženih del na cesti."
+        if not NAP_USERNAME or not NAP_PASSWORD: return "Dostop do prometnih informacij ni mogoč."
+        print("-> Pridobivam podatke o zaporah cest...")
+        try:
+            payload = {'grant_type': 'password', 'username': NAP_USERNAME, 'password': NAP_PASSWORD}
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            response = requests.post(NAP_TOKEN_URL, data=payload, headers=headers, timeout=10)
+            response.raise_for_status()
+            token = response.json().get('access_token')
+            if not token: return "Dostop do prometnih informacij ni uspel (ni bilo mogoče pridobiti žetona)."
+
+            headers_data = {'Authorization': f'Bearer {token}'}
+            data_response = requests.get(NAP_DATA_URL, headers=headers_data, timeout=10)
+            data_response.raise_for_status()
+            vsi_dogodki = data_response.json().get('features', [])
+            
+            relevantne_zapore = [
+                d['properties'] for d in vsi_dogodki
+                if any(lok in d.get('properties', {}).get('opis', '').lower() for lok in LOKACIJE_ZA_FILTER)
+            ]
+            if not relevantne_zapore:
+                return "Po podatkih portala promet.si na območju občine Rače-Fram trenutno ni zabeleženih del na cesti ali zapor."
+            
+            porocilo = "Našel sem naslednje **trenutne** informacije o delih na cesti (vir: promet.si):\n\n"
+            for z in relevantne_zapore:
+                porocilo += f"- **Cesta:** {z.get('cesta', 'Ni podatka')}\n  **Opis:** {z.get('opis', 'Ni podatka')}\n\n"
+            return porocilo
+        except requests.exceptions.RequestException as e:
+            return f"Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje. Poskusite kasneje ali obiščite promet.si. Tehnični razlog: {e}"
 
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
-        print("-> Zaznan namen: Odvoz odpadkov")
         stanje = self.zgodovina_seje[session_id].get('stanje', {})
+        naslov_iz_vprasanja = uporabnikovo_vprasanje
         
-        naslov = stanje.get('naslov_v_obravnavi', uporabnikovo_vprasanje)
+        if stanje.get('caka_na') == 'naslov':
+            naslov_iz_vprasanja = stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje
         
-        if not naslov or len(naslov) < 4:
-            stanje.update({'caka_na': 'naslov', 'namen': 'odpadki'})
+        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
+        iskani_deli = [beseda for beseda in re.split(r'[\s,-]', naslov_iz_vprasanja.lower()) if len(beseda) > 2 and beseda not in ["odvoz", "odpadkov", "smeti", "na", "v"]]
+        
+        if not iskani_deli:
+            stanje.update({'caka_na': 'naslov', 'namen': 'odpadki', 'izvirno_vprasanje': uporabnikovo_vprasanje})
             return "Seveda. Da vam lahko podam točen urnik, mi prosim poveste vašo ulico in kraj."
 
-        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
-        
-        iskani_deli = [del_naslova.strip() for del_naslova in naslov.lower().split() if len(del_naslova.strip()) > 2]
-        pravi_urniki_info = []
+        najdeni_urniki = []
         for i in range(len(vsi_urniki['ids'])):
             meta = vsi_urniki['metadatas'][i]
             podatki_o_naseljih = meta.get('naselja', '').lower()
-            if all(del_naslova in podatki_o_naseljih for del_naslova in iskani_deli):
-                pravi_urniki_info.append({'doc': vsi_urniki['documents'][i], 'meta': meta})
+            if all(del_besede in podatki_o_naseljih for del_besede in iskani_deli):
+                najdeni_urniki.append(vsi_urniki['documents'][i])
         
-        pravi_urniki_info = [dict(t) for t in {tuple(d.items()) for d in pravi_urniki_info}]
-        
-        if not pravi_urniki_info:
+        najdeni_urniki = sorted(list(set(najdeni_urniki)))
+
+        if not najdeni_urniki:
             stanje.clear()
-            return f"Oprostite, za lokacijo '{naslov}' ne najdem specifičnega urnika."
+            return f"Oprostite, za lokacijo '{' '.join(iskani_deli)}' ne najdem specifičnega urnika. Prosim, poskusite znova z bolj natančnim naslovom."
 
         stanje.clear()
-        return "\n\n".join([u['doc'] for u in pravi_urniki_info])
+        return "\n\n".join(najdeni_urniki)
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str):
         self.nalozi_bazo()
@@ -93,33 +118,32 @@ class VirtualniZupan:
         
         stanje = self.zgodovina_seje[session_id]['stanje']
         zgodovina = self.zgodovina_seje[session_id]['zgodovina']
-
-        if stanje.get('caka_na') == 'naslov' and stanje.get('namen') == 'odpadki':
-            stanje.pop('caka_na', None)
-            stanje['naslov_v_obravnavi'] = uporabnikovo_vprasanje
-            odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
-            zgodovina.append((uporabnikovo_vprasanje, odgovor))
-            return odgovor
-
         vprasanje_lower = uporabnikovo_vprasanje.lower()
-        if any(k in vprasanje_lower for k in ["smeti", "odpadki", "odvoz"]):
-            stanje['namen'] = "odpadki"
+
+        if stanje.get('caka_na') == 'naslov':
             odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             return odgovor
 
-        # Splošno iskanje (RAG) z integriranim preverjanjem prometa
+        if any(k in vprasanje_lower for k in ["smeti", "odpadki", "odvoz", "komunala"]):
+            odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            return odgovor
+
+        if any(k in vprasanje_lower for k in ["ceste", "promet", "dela", "zapora"]):
+            odgovor = self.preveri_zapore_cest()
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            return odgovor
+
+        # Splošno iskanje (RAG) za vse ostalo
         stanje.clear()
         zgodovina_za_prompt = "\n".join([f"Uporabnik: {q}\nŽupan: {a}" for q, a in zgodovina])
-        spletni_kontekst = ""
-        if any(k in vprasanje_lower for k in ["ceste", "promet", "dela", "zapora"]):
-            spletni_kontekst = self.preveri_zapore_cest()
-
         ocisceno_vprasanje = re.sub(r'[^\w\s]', '', vprasanje_lower)
-        rezultati_iskanja = self.collection.query(query_texts=[ocisceno_vprasanje], n_results=7, include=["documents", "metadatas"])
-        kontekst_baza = "\n\n---\n\n".join([f"VIR: {m.get('source', 'Neznan')}\n{d}" for d, m in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0])])
         
-        if not kontekst_baza and not spletni_kontekst:
+        rezultati_iskanja = self.collection.query(query_texts=[ocisceno_vprasanje], n_results=5)
+        kontekst_baza = "\n\n---\n\n".join(rezultati_iskanja['documents'][0]) if rezultati_iskanja['documents'] else ""
+        
+        if not kontekst_baza:
             return "Žal o tem nimam nobenih informacij."
 
         now = datetime.now()
@@ -131,14 +155,9 @@ class VirtualniZupan:
         Današnji datum je: {poln_datum}.
         
         PRAVILA:
-        1.  **SLEDENJE POGOVORU:** Upoštevaj pretekli pogovor za kontekst: "{zgodovina_za_prompt}".
-        2.  **NATANČNOST:** Odgovori samo na podlagi priloženih informacij. Ne ugibaj.
-        3.  **PROMET:** Če so na voljo SVEŽE INFORMACIJE O PROMETU, imajo absolutno prednost. Predstavi samo te informacije.
-        4.  **POVEZAVE:** Povezave (URL) vključi v odgovor samo, če so eksplicitno navedene v priloženih informacijah in direktno odgovarjajo na vprašanje. NIKOLI ne ponujaj splošne spletne strani občine, če ne najdeš odgovora.
+        1.  **NATANČNOST:** Odgovori samo na podlagi priloženih informacij iz baze znanja. Ne ugibaj.
+        2.  **POVEZAVE:** Povezave (URL) vključi v odgovor samo in izključno, če so eksplicitno navedene v priloženih informacijah in direktno odgovarjajo na vprašanje. NIKOLI ne ponujaj splošne spletne strani občine, če ne najdeš odgovora, raje reci, da informacije nimaš.
 
-        --- SVEŽE INFORMACIJE O PROMETU (če obstajajo) ---
-        {spletni_kontekst if spletni_kontekst else "Ni relevantnih svežih podatkov o prometu za to vprašanje."}
-        ---
         --- INFORMACIJE IZ BAZE ZNANJA ---
         {kontekst_baza}
         ---
