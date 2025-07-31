@@ -76,7 +76,7 @@
 
     const textBubble = document.createElement('div');
     textBubble.id = 'zupan-text-bubble';
-    textBubble.innerText = 'Zdravo. Sem virtualni Župan. Potrebujete pomoč?';
+    textBubble.innerText = 'Sem virtualni Župan. Potrebujete pomoč?';
 
     const chatBubble = document.createElement('div');
     chatBubble.id = 'zupan-chat-bubble';
