@@ -86,72 +86,97 @@ class VirtualniZupan:
         except requests.exceptions.RequestException as e:
             return f"Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje. Tehnični razlog: {e}"
 
-    def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
-        print("-> Zaznan namen: Odvoz odpadkov")
-        stanje_pogovora = self.zgodovina_seje[session_id].get('stanje', {})
+   def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
+        print("-> Zaznan namen: Odvoz odpadkov (z detektivskim iskanjem)")
+        stanje = self.zgodovina_seje[session_id].get('stanje', {})
         vprasanje_lower = uporabnikovo_vprasanje.lower()
 
-        naslov = stanje_pogovora.get('naslov')
-        if not naslov:
-            # Poskusimo razčleniti naslov iz trenutnega vprašanja
-            # Ta del je preprost in ga je mogoče v prihodnosti izboljšati z boljšim prepoznavanjem entitet
-            besede = re.split(r'[\s,]', uporabnikovo_vprasanje)
-            potential_naslov = ' '.join(besede[-2:]) # Vzamemo zadnji dve besedi kot možen naslov
-            if len(potential_naslov) > 4:
-                naslov = potential_naslov
+        # Poskusimo razbrati naslov iz vprašanja
+        naslov = None
+        # Preprosta, a boljša logika za iskanje ulice
+        kljucne_besede_za_naslov = re.findall(r'\b[A-ZČŠŽ][a-zčšž]+(?:\s[a-zčšž]+)*\b', uporabnikovo_vprasanje)
+        if kljucne_besede_za_naslov:
+            naslov = ' '.join(kljucne_besede_za_naslov).strip()
 
-        # Če v nobenem primeru nimamo naslova, vprašamo uporabnika
-        if not naslov:
-            self.zgodovina_seje[session_id]['stanje'] = {'namen': 'odpadki', 'caka_na': 'naslov'}
+        # Če ni naslova, vprašamo
+        if not naslov or len(naslov) < 4:
+            stanje['caka_na'] = 'naslov'
             return "Seveda. Da vam lahko podam točen urnik, mi prosim poveste vašo ulico in kraj."
 
-        # Imamo naslov, poiščemo pravi urnik
-        rezultati = self.collection.query(
-            query_texts=[naslov],
-            where={"kategorija": "Odvoz odpadkov"},
-            n_results=15 # Dobimo več rezultatov, da zagotovo najdemo pravi naslov
-        )
+        # NOVA, ZANESLJIVEJŠA LOGIKA ISKANJA
+        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
         
-        pravi_urniki = []
-        if rezultati and rezultati['documents'][0]:
-            for i, meta in enumerate(rezultati['metadatas'][0]):
-                if naslov.lower() in meta.get('naselja', '').lower():
-                    # Dodamo celoten dokument, saj vsebuje urnik za en tip odpadka
-                    pravi_urniki.append({'doc': rezultati['documents'][0][i], 'meta': meta})
-        
-        if not pravi_urniki:
-            self.zgodovina_seje[session_id]['stanje'] = {} # Počistimo stanje, da ne ostanemo v zanki
+        pravi_urniki_info = []
+        for i, meta in enumerate(vsi_urniki['metadatas']):
+            if naslov.lower() in meta.get('naselja', '').lower():
+                pravi_urniki_info.append({'doc': vsi_urniki['documents'][i], 'meta': meta})
+
+        if not pravi_urniki_info:
+            stanje.clear()
             return f"Oprostite, za naslov '{naslov}' ne najdem specifičnega urnika. Poskusite znova s polnim imenom ulice."
 
-        # Preverimo, ali uporabnik sprašuje za "naslednji" odvoz
+        # Logika za "naslednji" odvoz (ostane enaka, a sedaj z zanesljivimi podatki)
         if "naslednji" in vprasanje_lower:
             danes = datetime.now()
             najblizji_datum = None
-            najblizji_urnik = None
+            najblizji_urnik_meta = None
 
-            for urnik_info in pravi_urniki:
+            # Dodatno filtriranje po tipu odpadka, če je omenjen
+            tip_odpadka_vprasanje = None
+            if "mešani" in vprasanje_lower: tip_odpadka_vprasanje = "mešani komunalni odpadki"
+            elif "embalažo" in vprasanje_lower: tip_odpadka_vprasanje = "odpadna embalaža"
+            elif "papir" in vprasanje_lower: tip_odpadka_vprasanje = "papir in karton"
+            elif "steklo" in vprasanje_lower: tip_odpadka_vprasanje = "steklena embalaža"
+            elif "biološki" in vprasanje_lower: tip_odpadka_vprasanje = "biološki odpadki"
+
+            for urnik in pravi_urniki_info:
+                # Preverimo, ali se tip odpadka ujema, če je bil podan
+                if tip_odpadka_vprasanje and tip_odpadka_vprasanje not in urnik['meta'].get('tip_odpadka', '').lower():
+                    continue
+
                 try:
-                    datumi_str = urnik_info['doc'].split('terminih:')[1].strip().replace('.', '').split(',')
+                    datumi_str_del = urnik['doc'].split('terminih:')[1]
+                    datumi_str = re.findall(r'(\d{1,2}\.\d{1,2}\.)', datumi_str_del)
                     for datum_str in datumi_str:
-                        # Pravilno parsanje datuma
-                        dan, mesec = map(int, datum_str.strip().split('/'))
-                        datum_obj = datetime(danes.year, mesec, dan)
-                        
-                        if datum_obj > danes:
+                        datum_obj = datetime.strptime(f"{datum_str.strip()}{danes.year}", "%d.%m.%Y")
+                        if datum_obj >= danes:
                             if najblizji_datum is None or datum_obj < najblizji_datum:
                                 najblizji_datum = datum_obj
-                                najblizji_urnik = urnik_info
-                            break
+                                najblizji_urnik_meta = urnik['meta']
+                            break 
                 except Exception as e:
                     print(f"Napaka pri parsiranju datuma: {e}")
                     continue
             
-            if najblizji_datum and najblizji_urnik:
-                self.zgodovina_seje[session_id]['stanje'] = {} # Počistimo stanje
-                tip_odpadka = najblizji_urnik['meta'].get('tip_odpadka', 'Neznano')
+            if najblizji_datum and najblizji_urnik_meta:
+                stanje.clear()
+                tip_odpadka = najblizji_urnik_meta.get('tip_odpadka', 'Neznano')
                 return f"Naslednji odvoz za območje '{naslov}' bo **{najblizji_datum.strftime('%d.%m.%Y')}**, ko se odvažajo **{tip_odpadka}**."
             else:
-                return "V letošnjem letu ni več predvidenih odvozov za vaše območje."
+                return "V tem letu ni več predvidenih odvozov za vaše območje ali za izbran tip odpadka."
+
+        stanje.clear()
+        return "\n".join([u['doc'] for u in pravi_urniki_info])
+
+    def odgovori(self, uporabnikovo_vprasanje: str, session_id: str):
+        self.nalozi_bazo()
+        if not self.collection: return "Oprostite, moja baza znanja trenutno ni na voljo."
+
+        if session_id not in self.zgodovina_seje:
+            self.zgodovina_seje[session_id] = {'zgodovina': [], 'stanje': {}}
+        
+        stanje = self.zgodovina_seje[session_id].get('stanje', {})
+        if stanje.get('caka_na') == 'naslov':
+            stanje.pop('caka_na') # Odstranimo čakanje
+            odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        kljucne_besede_odpadki = ["smeti", "odpadki", "odvoz", "komunala"]
+        if any(beseda in uporabnikovo_vprasanje.lower() for beseda in kljucne_besede_odpadki):
+            odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
         
         self.zgodovina_seje[session_id]['stanje'] = {} # Počistimo stanje
         return "\n".join([u['doc'] for u in pravi_urniki])
