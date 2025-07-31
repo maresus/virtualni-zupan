@@ -5,10 +5,25 @@
     // 1. Ustvarimo CSS stile za naš widget
     const style = document.createElement('style');
     style.innerHTML = `
-        #zupan-chat-bubble {
+        .zupan-widget-container {
             position: fixed;
             bottom: 20px;
             right: 20px;
+            display: flex;
+            align-items: center;
+            z-index: 9998;
+        }
+        #zupan-text-bubble {
+            background-color: #f0f0f0;
+            padding: 10px 15px;
+            border-radius: 20px;
+            margin-right: 10px;
+            font-family: sans-serif;
+            font-size: 14px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: block; /* Prikazan na začetku */
+        }
+        #zupan-chat-bubble {
             width: 60px;
             height: 60px;
             background-color: #007bff;
@@ -18,8 +33,8 @@
             justify-content: center;
             cursor: pointer;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            z-index: 9998;
             transition: transform 0.2s;
+            flex-shrink: 0;
         }
         #zupan-chat-bubble:hover {
             transform: scale(1.1);
@@ -53,24 +68,35 @@
     document.head.appendChild(style);
 
     // 2. Ustvarimo HTML elemente
+    const container = document.createElement('div');
+    container.className = 'zupan-widget-container';
+
+    const textBubble = document.createElement('div');
+    textBubble.id = 'zupan-text-bubble';
+    textBubble.innerText = 'Potrebujete pomoč?';
+
     const chatBubble = document.createElement('div');
     chatBubble.id = 'zupan-chat-bubble';
-    // SVG ikona za oblaček
     chatBubble.innerHTML = `<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"></path></svg>`;
+    
+    container.appendChild(textBubble);
+    container.appendChild(chatBubble);
 
     const chatWidget = document.createElement('div');
     chatWidget.id = 'zupan-chat-widget';
     chatWidget.innerHTML = `<iframe src="${chatUrl}"></iframe>`;
 
-    document.body.appendChild(chatBubble);
+    document.body.appendChild(container);
     document.body.appendChild(chatWidget);
 
     // 3. Dodamo logiko za odpiranje in zapiranje
-    chatBubble.addEventListener('click', () => {
+    container.addEventListener('click', () => {
         if (chatWidget.style.display === 'none' || chatWidget.style.display === '') {
             chatWidget.style.display = 'flex';
+            textBubble.style.display = 'none'; // Skrijemo besedilo, ko je chat odprt
         } else {
             chatWidget.style.display = 'none';
+            textBubble.style.display = 'block'; // Pokažemo besedilo, ko je chat zaprt
         }
     });
 })();
