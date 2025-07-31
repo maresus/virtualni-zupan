@@ -24,10 +24,9 @@ NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 12.0 - Stabilna)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 13.0 - Logični Popravki)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
-        self.nap_access_token = None
         self.zgodovina_seje = {}
 
     def nalozi_bazo(self):
@@ -53,13 +52,15 @@ class VirtualniZupan:
         if not NAP_USERNAME or not NAP_PASSWORD: return "Dostop do prometnih informacij ni mogoč."
         print("-> Pridobivam podatke o zaporah cest...")
         try:
+            # Pridobivanje tokena
             payload = {'grant_type': 'password', 'username': NAP_USERNAME, 'password': NAP_PASSWORD}
             headers = {'Content-Type': 'application/x-www-form-urlencoded'}
             response = requests.post(NAP_TOKEN_URL, data=payload, headers=headers, timeout=10)
             response.raise_for_status()
             token = response.json().get('access_token')
-            if not token: return "Dostop do prometnih informacij ni uspel (ni bilo mogoče pridobiti žetona)."
+            if not token: return "Dostop do prometnih informacij ni uspel."
 
+            # Pridobivanje podatkov
             headers_data = {'Authorization': f'Bearer {token}'}
             data_response = requests.get(NAP_DATA_URL, headers=headers_data, timeout=10)
             data_response.raise_for_status()
@@ -77,37 +78,50 @@ class VirtualniZupan:
                 porocilo += f"- **Cesta:** {z.get('cesta', 'Ni podatka')}\n  **Opis:** {z.get('opis', 'Ni podatka')}\n\n"
             return porocilo
         except requests.exceptions.RequestException as e:
-            return f"Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje. Poskusite kasneje ali obiščite promet.si. Tehnični razlog: {e}"
+            return f"Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje. Poskusite kasneje. Tehnični razlog: {e}"
 
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
+        print("-> Zaznan namen: Odvoz odpadkov")
         stanje = self.zgodovina_seje[session_id].get('stanje', {})
-        naslov_iz_vprasanja = uporabnikovo_vprasanje
+        vprasanje_za_iskanje = stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje
         
-        if stanje.get('caka_na') == 'naslov':
-            naslov_iz_vprasanja = stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje
+        # 1. korak: Izlušči ključne besede za lokacijo
+        besede_vprasanja = re.split(r'[\s,-]', vprasanje_za_iskanje.lower())
+        kljucne_besede_lokacija = [b for b in besede_vprasanja if b and b not in ["odvoz", "odpadkov", "smeti", "na", "v", "je", "kdaj", "naslednji", "mešanih", "embalažo", "papir", "steklo", "bioloških"]]
         
-        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
-        iskani_deli = [beseda for beseda in re.split(r'[\s,-]', naslov_iz_vprasanja.lower()) if len(beseda) > 2 and beseda not in ["odvoz", "odpadkov", "smeti", "na", "v"]]
-        
-        if not iskani_deli:
+        if not kljucne_besede_lokacija:
             stanje.update({'caka_na': 'naslov', 'namen': 'odpadki', 'izvirno_vprasanje': uporabnikovo_vprasanje})
             return "Seveda. Da vam lahko podam točen urnik, mi prosim poveste vašo ulico in kraj."
 
-        najdeni_urniki = []
+        # 2. korak: Poišči območje, ki ustreza lokaciji
+        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
+        najdeni_urniki_za_lokacijo = []
         for i in range(len(vsi_urniki['ids'])):
             meta = vsi_urniki['metadatas'][i]
             podatki_o_naseljih = meta.get('naselja', '').lower()
-            if all(del_besede in podatki_o_naseljih for del_besede in iskani_deli):
-                najdeni_urniki.append(vsi_urniki['documents'][i])
+            if all(kljucna_beseda in podatki_o_naseljih for kljucna_beseda in kljucne_besede_lokacija):
+                najdeni_urniki_za_lokacijo.append(vsi_urniki['documents'][i])
         
-        najdeni_urniki = sorted(list(set(najdeni_urniki)))
-
-        if not najdeni_urniki:
+        if not najdeni_urniki_za_lokacijo:
             stanje.clear()
-            return f"Oprostite, za lokacijo '{' '.join(iskani_deli)}' ne najdem specifičnega urnika. Prosim, poskusite znova z bolj natančnim naslovom."
+            return f"Oprostite, za lokacijo '{' '.join(kljucne_besede_lokacija)}' ne najdem specifičnega urnika. Preverite ime ulice."
+
+        # 3. korak: Filtriraj urnike glede na tip odpadka (če je omenjen)
+        koncni_urniki = []
+        tip_odpadka_omenjen = False
+        for tip in ["mešani", "embalažo", "papir", "steklo", "biološki"]:
+            if tip in vprasanje_za_iskanje.lower():
+                tip_odpadka_omenjen = True
+                for urnik in najdeni_urniki_za_lokacijo:
+                    if tip in urnik.lower():
+                        koncni_urniki.append(urnik)
+                break
+        
+        if not tip_odpadka_omenjen:
+            koncni_urniki = najdeni_urniki_za_lokacijo
 
         stanje.clear()
-        return "\n\n".join(najdeni_urniki)
+        return "\n\n".join(sorted(list(set(koncni_urniki))))
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str):
         self.nalozi_bazo()
@@ -120,11 +134,13 @@ class VirtualniZupan:
         zgodovina = self.zgodovina_seje[session_id]['zgodovina']
         vprasanje_lower = uporabnikovo_vprasanje.lower()
 
+        # Preverjanje, ali odgovarja na vprašanje o lokaciji
         if stanje.get('caka_na') == 'naslov':
             odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             return odgovor
 
+        # Prepoznavanje namena glede na ključne besede
         if any(k in vprasanje_lower for k in ["smeti", "odpadki", "odvoz", "komunala"]):
             odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
@@ -141,7 +157,7 @@ class VirtualniZupan:
         ocisceno_vprasanje = re.sub(r'[^\w\s]', '', vprasanje_lower)
         
         rezultati_iskanja = self.collection.query(query_texts=[ocisceno_vprasanje], n_results=5)
-        kontekst_baza = "\n\n---\n\n".join(rezultati_iskanja['documents'][0]) if rezultati_iskanja['documents'] else ""
+        kontekst_baza = "\n\n---\n\n".join(rezultati_iskanja['documents'][0]) if rezultati_iskanja.get('documents') else ""
         
         if not kontekst_baza:
             return "Žal o tem nimam nobenih informacij."
@@ -156,7 +172,8 @@ class VirtualniZupan:
         
         PRAVILA:
         1.  **NATANČNOST:** Odgovori samo na podlagi priloženih informacij iz baze znanja. Ne ugibaj.
-        2.  **POVEZAVE:** Povezave (URL) vključi v odgovor samo in izključno, če so eksplicitno navedene v priloženih informacijah in direktno odgovarjajo na vprašanje. NIKOLI ne ponujaj splošne spletne strani občine, če ne najdeš odgovora, raje reci, da informacije nimaš.
+        2.  **POVEZAVE:** Povezave (URL) vključi v odgovor samo in izključno, če so eksplicitno navedene v priloženih informacijah. NIKOLI ne ponujaj splošne spletne strani občine, če ne najdeš odgovora.
+        3.  **ZGODOVINA:** Upoštevaj pretekli pogovor za kontekst: "{zgodovina_za_prompt}".
 
         --- INFORMACIJE IZ BAZE ZNANJA ---
         {kontekst_baza}
