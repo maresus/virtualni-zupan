@@ -24,24 +24,27 @@
             display: block; /* Prikazan na začetku */
         }
         #zupan-chat-bubble {
-            width: 60px;
-            height: 60px;
-            background-color: #007bff;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            transition: transform 0.2s;
-            flex-shrink: 0;
+    position: fixed;
+    bottom: 25px;
+    right: 25px;
+    width: 80px; /* <--- POVEČANO */
+    height: 80px; /* <--- POVEČANO */
+    background-color: #007bff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    z-index: 9998;
+    transition: transform 0.2s;
         }
         #zupan-chat-bubble:hover {
             transform: scale(1.1);
         }
         #zupan-chat-bubble svg {
-            width: 32px;
-            height: 32px;
+            width: 42px;
+            height: 42px;
             fill: white;
         }
         #zupan-chat-widget {
@@ -73,7 +76,7 @@
 
     const textBubble = document.createElement('div');
     textBubble.id = 'zupan-text-bubble';
-    textBubble.innerText = 'Potrebujete pomoč?';
+    textBubble.innerText = 'Zdravo. Sem virtualni Župan. Potrebujete pomoč?';
 
     const chatBubble = document.createElement('div');
     chatBubble.id = 'zupan-chat-bubble';
