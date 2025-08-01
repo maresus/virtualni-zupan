@@ -2,6 +2,7 @@ import os
 import json
 import chromadb
 import requests
+import traceback
 import re
 from datetime import datetime
 from openai import OpenAI
@@ -24,7 +25,7 @@ NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 20.0 - Generalni Remont)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 22.0 - Sinteza Vsega)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.zgodovina_seje = {}
@@ -48,6 +49,30 @@ class VirtualniZupan:
         except Exception as e:
             print(f"Napaka pri beleženju pogovora: {e}")
 
+    def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora, zadnje_vprasanje):
+        if not zgodovina_pogovora: return zadnje_vprasanje
+        print("-> Kličem specialista za spomin...")
+        zgodovina_str = "\n".join([f"Uporabnik: {q}\nAsistent: {a}" for q, a in zgodovina_pogovora])
+        prompt = f"""Tvoja naloga je, da glede na zgodovino pogovora preoblikuješ novo vprašanje v samostojno vprašanje.
+Primer:
+Zgodovina:
+Uporabnik: Ali imate poletni kamp?
+Asistent: Da, imamo.
+Novo vprašanje: "kontakt?"
+Samostojno vprašanje: "kakšen je kontakt za poletni kamp?"
+---
+Zgodovina:
+{zgodovina_str}
+Novo vprašanje: "{zadnje_vprasanje}"
+Samostojno vprašanje:"""
+        try:
+            response = self.openai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.0)
+            preoblikovano_vprasanje = response.choices[0].message.content.strip().replace('"', '')
+            print(f"Originalno: '{zadnje_vprasanje}' -> Preoblikovano: '{preoblikovano_vprasanje}'")
+            return preoblikovano_vprasanje
+        except Exception:
+            return zadnje_vprasanje
+
     def preveri_zapore_cest(self):
         if not NAP_USERNAME or not NAP_PASSWORD: return "Dostop do prometnih informacij ni mogoč."
         print("-> Kličem specialista za promet (NAP API)...")
@@ -64,7 +89,7 @@ class VirtualniZupan:
             vsi_dogodki = data_response.json().get('features', [])
             relevantne_zapore = [
                 d['properties'] for d in vsi_dogodki
-                if any(lok in d.get('properties', {}).get('opis', '').lower() for lok in LOKACIJE_ZA_FILTER)
+                if any(lok.lower() in d.get('properties', {}).get('opis', '').lower() for lok in LOKACIJE_ZA_FILTER)
             ]
             if not relevantne_zapore:
                 return "Po podatkih portala promet.si na območju občine Rače-Fram trenutno ni zabeleženih del na cesti ali zapor."
@@ -79,14 +104,11 @@ class VirtualniZupan:
         print("-> Kličem specialista za odpadke...")
         stanje = self.zgodovina_seje[session_id].get('stanje', {})
         vprasanje_za_iskanje = (stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje).strip()
-        
         besede_vprasanja = re.split(r'[\s,-]', vprasanje_za_iskanje.lower())
         kljucne_besede_lokacija = [b for b in besede_vprasanja if len(b) > 2 and b not in ["odvoz", "odpadkov", "smeti", "na", "v", "je", "kdaj", "naslednji", "mešanih", "embalažo", "papir", "steklo", "bioloških", "zanima", "me", "za"]]
-        
         if not kljucne_besede_lokacija and 'caka_na' not in stanje:
             stanje.update({'caka_na': 'naslov', 'namen': 'odpadki', 'izvirno_vprasanje': uporabnikovo_vprasanje})
             return "Seveda. Da vam lahko podam točen urnik, mi prosim poveste vašo ulico in kraj."
-
         vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
         najdeni_urniki = []
         for i in range(len(vsi_urniki['ids'])):
@@ -94,45 +116,11 @@ class VirtualniZupan:
             podatki_o_naseljih = meta.get('naselja', '').lower()
             if all(beseda in podatki_o_naseljih for beseda in kljucne_besede_lokacija):
                 najdeni_urniki.append(vsi_urniki['documents'][i])
-        
         if not najdeni_urniki:
             stanje.clear()
             return f"Oprostite, za lokacijo '{' '.join(kljucne_besede_lokacija)}' ne najdem specifičnega urnika. Preverite ime ulice."
-
         stanje.clear()
         return "\n\n".join(sorted(list(set(najdeni_urniki))))
-
-    def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora, zadnje_vprasanje):
-        if not zgodovina_pogovora: return zadnje_vprasanje
-        
-        print("-> Kličem specialista za spomin (preoblikovanje vprašanja)...")
-        zgodovina_str = "\n".join([f"Uporabnik: {q}\nAsistent: {a}" for q, a in zgodovina_pogovora])
-        prompt = f"""Tvoja naloga je, da glede na zgodovino pogovora preoblikuješ novo vprašanje v samostojno vprašanje, ki ga je mogoče razumeti brez zgodovine.
-
-Primer:
-Zgodovina:
-Uporabnik: Ali imate poletni kamp?
-Asistent: Da, imamo poletni kamp.
-Novo vprašanje: "kakšna je cena?"
-Samostojno vprašanje: "kakšna je cena za poletni kamp?"
-
-Zdaj uporabi to logiko na spodnjih podatkih.
-
-Zgodovina:
-{zgodovina_str}
-
-Novo vprašanje: "{zadnje_vprasanje}"
-
-Samostojno vprašanje:
-"""
-        try:
-            response = self.openai_client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.0, max_tokens=100)
-            preoblikovano_vprasanje = response.choices[0].message.content.strip().replace('"', '')
-            print(f"Originalno vprašanje: '{zadnje_vprasanje}' -> Preoblikovano: '{preoblikovano_vprasanje}'")
-            return preoblikovano_vprasanje
-        except Exception as e:
-            print(f"Napaka pri preoblikovanju vprašanja: {e}")
-            return zadnje_vprasanje
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str):
         self.nalozi_bazo()
@@ -144,23 +132,19 @@ Samostojno vprašanje:
         stanje = self.zgodovina_seje[session_id]['stanje']
         zgodovina = self.zgodovina_seje[session_id]['zgodovina']
         
+        # 1. korak: SPOMIN - Vedno najprej preoblikujemo vprašanje
         pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
+        vprasanje_lower = pametno_vprasanje.lower()
 
-        prompt_odlocanja = f"""Ti si pametni usmerjevalnik. Ugotovi namen uporabnikovega vprašanja. Možnosti so: `ODGOVORI_SPLOŠNO`, `POKLIČI_PROMET_API`, `ZAČNI_POGOVOR_ODPADKI`.
-Uporabnikovo vprašanje: "{pametno_vprasanje}"
-Odgovori samo z eno izmed treh možnosti."""
-        
-        response_odlocitev = self.openai_client.chat.completions.create(model=GENERATOR_MODEL_NAME, messages=[{"role": "user", "content": prompt_odlocanja}], temperature=0.0, max_tokens=20)
-        odlocitev = response_odlocitev.choices[0].message.content.strip()
-        print(f"Odločitev pametnega direktorja: {odlocitev}")
-
-        if "POKLIČI_PROMET_API" in odlocitev:
+        # 2. korak: USMERJANJE - Zanesljiv if/elif/else usmerjevalnik
+        KLJUCNE_BESEDE_PROMET = ["cesta", "ceste", "cesti", "promet", "dela", "delo", "zapora", "zapore", "zaprta"]
+        if any(re.search(r'\b' + k + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_PROMET):
             odgovor = self.preveri_zapore_cest()
-        elif "ZAČNI_POGOVOR_ODPADKI" in odlocitev or stanje.get('caka_na') == 'naslov':
+        elif any(re.search(r'\b' + k + r'\b', vprasanje_lower) for k in ["smeti", "odpadki", "odvoz"]) or stanje.get('caka_na') == 'naslov':
             odgovor = self.obravnavaj_odvoz_odpadkov(uporabnikovo_vprasanje, session_id)
         else:
-            ocisceno_vprasanje = re.sub(r'[^\w\s]', '', pametno_vprasanje.lower())
-            rezultati_iskanja = self.collection.query(query_texts=[ocisceno_vprasanje], n_results=5, include=["documents", "metadatas"])
+            # 3. korak: SPLOŠNO ISKANJE (RAG) - Samo če ni specialist
+            rezultati_iskanja = self.collection.query(query_texts=[vprasanje_lower], n_results=5, include=["documents", "metadatas"])
             kontekst_baza = ""
             if rezultati_iskanja.get('documents'):
                 for doc, meta in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0]):
@@ -170,14 +154,15 @@ Odgovori samo z eno izmed treh možnosti."""
 
             now = datetime.now()
             prompt_za_llm = f"""Ti si 'Virtualni župan občine Rače-Fram'.
-DIREKTIVA #1 (VAROVALKA ZA DATUME): Tvoja najpomembnejša naloga je preveriti datume. Današnji datum je {now.strftime('%d.%m.%Y')}. Če je katerikoli podatek v priloženem kontekstu iz leta, ki je manjše od {now.year}, ga moraš brezpogojno IGNORIRATI. Povej, da nimaš svežih informacij o tej temi. To pravilo je pomembnejše od vsega drugega.
-PRAVILA:
-1. Oblikuj odgovor berljivo.
-2. Če najdeš URL, ga vključi.
-3. Odgovori samo iz priloženega konteksta.
+DIREKTIVA #1 (VAROVALKA ZA DATUME): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek v kontekstu iz leta, ki je manjše od {now.year}, ga moraš brezpogojno IGNORIRATI in ga ne smeš omeniti. Povej, da nimaš svežih informacij o tej temi. To pravilo je pomembnejše od vsega drugega.
+DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti izjemno pregleden. Ključne informacije (zneski, datumi) **poudari s krepko pisavo**. Kjer naštevaš, **obvezno uporabi alineje (-)**.
+PRAVILA: Odgovori samo iz priloženega konteksta. Vključi URL, če obstaja in ni 'Brez'.
 --- KONTEKST ---
 {kontekst_baza}---
-VPRAŠANJE: "{uporabnikovo_vprasanje}"
+VPRAŠANJE UPORABNIKA: "{uporabnikovo_vprasanje}"
+ZGODOVINA POGOVORA:
+{"\n".join([f"U: {q}\nA: {a}" for q, a in zgodovina])}
+---
 ODGOVOR:"""
             response_odgovor = self.openai_client.chat.completions.create(model=GENERATOR_MODEL_NAME, messages=[{"role": "user", "content": prompt_za_llm}], temperature=0.0)
             odgovor = response_odgovor.choices[0].message.content
