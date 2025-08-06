@@ -12,9 +12,26 @@ from difflib import SequenceMatcher
 
 # --- KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHROMA_DB_PATH = os.path.join(BASE_DIR, "data", "chroma_db")
-LOG_FILE_PATH = os.path.join(BASE_DIR, "data", "zupan_pogovori.jsonl")
 load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
+
+# --- Pametno določanje poti glede na okolje ---
+if os.getenv('ENV_TYPE') == 'production':
+    # Produkcijsko okolje na Renderju
+    DATA_DIR = "/data"
+    print("Zaznano produkcijsko okolje (Render). Poti so nastavljene na /data.")
+else:
+    # Lokalno razvojno okolje
+    # Popravljena pot za lokalno okolje, da ustreza strukturi
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+    print("Zaznano lokalno okolje. Poti so nastavljene relativno.")
+    # Zagotovimo, da lokalna mapa obstaja
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+
+CHROMA_DB_PATH = os.path.join(DATA_DIR, "chroma_db")
+LOG_FILE_PATH = os.path.join(DATA_DIR, "zupan_pogovori.jsonl")
+# --- Konec pametnega določanja poti ---
+
 COLLECTION_NAME = "obcina_race_fram_prod"
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 GENERATOR_MODEL_NAME = "gpt-4o-mini"

@@ -4,11 +4,35 @@ import chromadb
 from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 
-# --- KONFIGURACIJA ZA RENDER ---
+# --- KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, '.env'))
-SOURCE_DIRECTORY = os.path.join(BASE_DIR, "izvorni_podatki")
-CHROMA_DB_PATH = os.path.join(BASE_DIR, "VIRT_ZUPAN_RF", "data", "chroma_db")
+load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
+
+# --- Pametno določanje poti glede na okolje ---
+if os.getenv('ENV_TYPE') == 'production':
+    # Produkcijsko okolje na Renderju
+    DATA_DIR = "/data"
+    print("Zaznano produkcijsko okolje (Render). Poti so nastavljene na /data.")
+else:
+    # Lokalno razvojno okolje
+    # Popravljena pot za lokalno okolje, da ustreza strukturi
+    DATA_DIR = os.path.join(BASE_DIR, "data")
+    print("Zaznano lokalno okolje. Poti so nastavljene relativno.")
+    # Zagotovimo, da lokalna mapa obstaja
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+
+CHROMA_DB_PATH = os.path.join(DATA_DIR, "chroma_db")
+LOG_FILE_PATH = os.path.join(DATA_DIR, "zupan_pogovori.jsonl")
+# --- Konec pametnega določanja poti ---
+
+COLLECTION_NAME = "obcina_race_fram_prod"
+EMBEDDING_MODEL_NAME = "text-embedding-3-small"
+GENERATOR_MODEL_NAME = "gpt-4o-mini"
+NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
+NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks.geojson.sl_SI"
+NAP_USERNAME = os.getenv("NAP_USERNAME")
+NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
