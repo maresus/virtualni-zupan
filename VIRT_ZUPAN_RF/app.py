@@ -3,7 +3,7 @@ import uuid
 from flask import Flask, request, jsonify, render_template, session, send_from_directory
 from flask_cors import CORS # Nov import
 from dotenv import load_dotenv
-from VIRT_ZUPAN_RF_api import VirtualniZupan
+from .VIRT_ZUPAN_RF_api import VirtualniZupan
 
 load_dotenv()
 app = Flask(__name__)
