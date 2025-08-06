@@ -6,7 +6,7 @@ from chromadb.utils import embedding_functions
 
 # --- KONFIGURACIJA ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # --- Pametno določanje poti glede na okolje ---
 if os.getenv('ENV_TYPE') == 'production':
@@ -15,24 +15,15 @@ if os.getenv('ENV_TYPE') == 'production':
     print("Zaznano produkcijsko okolje (Render). Poti so nastavljene na /data.")
 else:
     # Lokalno razvojno okolje
-    # Popravljena pot za lokalno okolje, da ustreza strukturi
-    DATA_DIR = os.path.join(BASE_DIR, "data")
+    DATA_DIR = os.path.join(BASE_DIR, "VIRT_ZUPAN_RF", "data")
     print("Zaznano lokalno okolje. Poti so nastavljene relativno.")
-    # Zagotovimo, da lokalna mapa obstaja
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
 
 CHROMA_DB_PATH = os.path.join(DATA_DIR, "chroma_db")
-LOG_FILE_PATH = os.path.join(DATA_DIR, "zupan_pogovori.jsonl")
+# --- POPRAVEK: Dodana manjkajoča definicija za SOURCE_DIRECTORY ---
+SOURCE_DIRECTORY = os.path.join(BASE_DIR, "izvorni_podatki")
 # --- Konec pametnega določanja poti ---
-
-COLLECTION_NAME = "obcina_race_fram_prod"
-EMBEDDING_MODEL_NAME = "text-embedding-3-small"
-GENERATOR_MODEL_NAME = "gpt-4o-mini"
-NAP_TOKEN_URL = "https://b2b.nap.si/uc/user/token"
-NAP_DATA_URL = "https://b2b.nap.si/data/b2b.roadworks.geojson.sl_SI"
-NAP_USERNAME = os.getenv("NAP_USERNAME")
-NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
@@ -67,6 +58,10 @@ def zgradi_bazo():
         print("Napaka: OpenAI API ključ ni najden."); return
 
     openai_ef = embedding_functions.OpenAIEmbeddingFunction(api_key=openai_api_key, model_name=EMBEDDING_MODEL_NAME)
+    
+    if not os.path.exists(CHROMA_DB_PATH):
+        os.makedirs(CHROMA_DB_PATH)
+
     chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
     print(f"Brisanje stare kolekcije '{COLLECTION_NAME}'...");
@@ -81,6 +76,10 @@ def zgradi_bazo():
     doc_id_counter = 0
 
     print(f"Branje dokumentov iz: '{SOURCE_DIRECTORY}'...")
+    if not os.path.isdir(SOURCE_DIRECTORY):
+        print(f"NAPAKA: Mapa z izvornimi podatki '{SOURCE_DIRECTORY}' ne obstaja!")
+        return
+
     for filename in os.listdir(SOURCE_DIRECTORY):
         file_path = os.path.join(SOURCE_DIRECTORY, filename)
         if filename.endswith(".txt"):
