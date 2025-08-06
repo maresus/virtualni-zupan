@@ -8,7 +8,7 @@ from chromadb.utils import embedding_functions
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 SOURCE_DIRECTORY = os.path.join(BASE_DIR, "izvorni_podatki")
-CHROMA_DB_PATH = "/data/chroma_db" # Pot do trajnega diska na Renderju
+CHROMA_DB_PATH = os.path.join(BASE_DIR, "VIRT_ZUPAN_RF", "data", "chroma_db")
 
 COLLECTION_NAME = "obcina_race_fram_prod" 
 EMBEDDING_MODEL_NAME = "text-embedding-3-small"
