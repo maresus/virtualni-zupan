@@ -57,7 +57,10 @@ class Config:
         "Steklena embalaža": ["steklena embalaza", "steklena embalaža", "steklo", "stekla"]
     })
 
-    GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "cesti", "ulica", "ulici", "pot", "trg", "ob", "naselje")
+    GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "cesti", "ulica", "ulici", "pot", "trg", "naselje")
+    GENERIC_PREPS: Tuple[str, ...] = ("na", "v", "za", "ob", "pod", "pri", "nad", "do", "od", "k", "proti")
+
+    FALLBACK_CONTACT: str = "Občina Rače-Fram: 02 609 60 10"
 
     def __post_init__(self):
         object.__setattr__(self, 'CHROMA_DB_PATH', os.path.join(self.DATA_DIR, "chroma_db"))
@@ -89,38 +92,68 @@ def normalize_text(s: Optional[str]) -> str:
     if not s:
         return ""
     s = s.lower()
-    # odstrani diakritiko (bistriška -> bistriska)
     s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('utf-8')
-    # ločila -> presledki
     s = re.sub(r'[^\w\s]', ' ', s)
-    # zloži presledke
     return re.sub(r'\s+', ' ', s).strip()
 
+def _ratio(a: str, b: str) -> float:
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio()
+
 def sl_variant_eq(a: str, b: str) -> bool:
-    """
-    Groba slovenska fleksijska ekvivalenca:
-    - končnice -a/-i/-o/-e, -ski/-ska/-sko, -ški/-ška/-ško, -ek/-ka ipd.
-    - toleranca za 'ra-ce' vs 'race' je že v normalize_text.
-    """
     a_n = normalize_text(a)
     b_n = normalize_text(b)
     if a_n == b_n:
         return True
-    # odreži generične slovnične končnice (en znak)
-    if len(a_n) > 2 and len(b_n) > 2 and a_n[:-1] == b_n[:-1] and {a_n[-1], b_n[-1]} <= {"a","i","e","o","u"}:
-        return True
-    # -ski/-ska/-sko/-ški/-ška/-ško
-    for suffs in (("ski","ska","sko"), ("ski","ska","sko","sci","sca","sco"), ("ski","ski"), ("ski","ska"), ("ski","sko")):
-        pass
-    a_stripped = re.sub(r'(ski|ska|sko|skih|skih|skega|skem|sko|ska|ski)$', '', a_n)
-    b_stripped = re.sub(r'(ski|ska|sko|skih|skih|skega|skem|sko|ska|ski)$', '', b_n)
+    # odreži pogoste slovenske končnice
+    a_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih|ska|sko|ski)$', '', a_n)
+    b_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih|ska|sko|ski)$', '', b_n)
     if a_stripped and a_stripped == b_stripped:
+        return True
+    # še mehkejše: -a/-i/-o/-e
+    if len(a_n) > 2 and len(b_n) > 2 and a_n[:-1] == b_n[:-1] and {a_n[-1], b_n[-1]} <= {"a","i","e","o","u"}:
         return True
     return False
 
+def street_phrase_matches(query_phrase: str, street_tok: str, allow_substrings: bool = True, threshold: float = 0.88) -> bool:
+    """
+    Ujemanje ulice:
+    - odstrani generične besede (cesta, ulica, pot...) in predloge (na, v, pod...).
+    - substring ujemanje je onemogočeno za kratke besede (<4).
+    """
+    generic = set(normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split()) | set(normalize_text(" ".join(cfg.GENERIC_PREPS)).split())
+    qp = normalize_text(query_phrase)
+    st = normalize_text(street_tok)
+
+    if sl_variant_eq(qp, st):
+        return True
+
+    q_words = [w for w in qp.split() if w not in generic and len(w) >= 3]
+    street_words = [w for w in st.split() if w not in generic and len(w) >= 3]
+
+    if not q_words:
+        # nič pametnega v frazi -> prepusti drugim frazam
+        return False
+
+    for qw in q_words:
+        matched = False
+        for sw in street_words:
+            if sl_variant_eq(qw, sw):
+                matched = True
+                break
+            # substring samo za dovolj dolge besede
+            if allow_substrings and len(qw) >= 4 and (qw in sw or sw in qw):
+                matched = True
+                break
+            if _ratio(qw, sw) >= threshold:
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
+
 def get_canonical_waste(text: str) -> Optional[str]:
     norm = normalize_text(text)
-    # Heuristike
     if ("rumen" in norm and "kant" in norm) or "embal" in norm:
         return "Odpadna embalaža"
     if "komunaln" in norm and "odpadk" in norm:
@@ -131,88 +164,37 @@ def get_canonical_waste(text: str) -> Optional[str]:
         return "Steklena embalaža"
     if "papir" in norm or "karton" in norm:
         return "Papir in karton"
-    # Varianti
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
             if normalize_text(v) in norm:
                 return canon
-    # Fuzzy fallback
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
-            if _ratio(norm, normalize_text(v)) >= 0.87:
+            if _ratio(norm, normalize_text(v)) >= 0.90:
                 return canon
     return None
 
-def _ratio(a: str, b: str) -> float:
-    # preprost Levenshtein-like ratio preko sequence matcherja (brez uvoza)
-    from difflib import SequenceMatcher
-    return SequenceMatcher(None, a, b).ratio()
-
-def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.86) -> bool:
-    """
-    Natančno ujemanje ulice:
-    - ignorira generične besede (cesta, ulica, pot...)
-    - primerja po besedah, omogoča slovenske fleksije in diakritiko.
-    """
-    generic = set(normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split())
-    qp = normalize_text(query_phrase)
-    st = normalize_text(street_tok)
-
-    if sl_variant_eq(qp, st):
-        return True
-
-    q_words = [w for w in qp.split() if w not in generic]
-    street_words = [w for w in st.split() if w not in generic]
-    if not q_words:
-        return _ratio(qp, st) >= threshold
-
-    for qw in q_words:
-        matched = False
-        for sw in street_words:
-            if sl_variant_eq(qw, sw):
-                matched = True
-                break
-            if _ratio(qw, sw) >= threshold or (qw in sw) or (sw in qw):
-                matched = True
-                break
-        if not matched:
-            return False
-    return True
-
 def extract_locations_from_naselja(naselja_field: str) -> List[str]:
-    """
-    Primeri formata:
-      'Fram: Bistriška cesta, Pot k Mlinu, ...'
-      'Rače: Pod Terasami; Fram: K Ribniku Fram, ...'
-    Vrne: ['fram', 'bistriska cesta', 'pot k mlinu', 'race', 'pod terasami', ...]
-    """
     parts = set()
     if not naselja_field:
         return []
     naselja_clean = re.sub(r'\(h\. *št\..*?\)', '', naselja_field)
     segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', naselja_clean)
-    prefix = ""
     for seg in segments:
         seg = seg.strip()
         if not seg:
             continue
         if seg.endswith(':'):
-            prefix = normalize_text(seg[:-1])
-            if prefix:
-                parts.add(prefix)
+            # naselje, a ga ne dodajamo k ulicam (da ne kvarimo ujemanja)
+            continue
         else:
             for sub in seg.split(','):
                 n = normalize_text(sub)
                 if n:
                     parts.add(n)
-                    # ne dodaj kombinacij tipa 'bistriska cesta fram' (preveč agresivno v 40.0)
     return list(parts)
 
 def parse_dates_from_text(text: str) -> List[str]:
-    """
-    Pobere vse datume v obliki d.m. ali d.m. (s piko na koncu).
-    Vrne jih v vrstnem redu pojavljanja (brez duplikatov).
-    """
     dates = re.findall(r'(\d{1,2}\.\d{1,2}\.?)', text)
     seen = set()
     out = []
@@ -224,15 +206,16 @@ def parse_dates_from_text(text: str) -> List[str]:
     return out
 
 def detect_intent_qna(q_norm: str) -> str:
-    """
-    Dodatna usmeritev za RAG (izven odpadkov in prometa).
-    """
     if re.search(r'\bkdo je\b', q_norm) and ('zupan' in q_norm or 'župan' in q_norm):
         return 'who_is_mayor'
     if 'kontakt' in q_norm or 'telefon' in q_norm or 'e-mail' in q_norm or 'stevilka' in q_norm or 'številka' in q_norm:
         return 'contact'
     if 'prevoz' in q_norm or 'vozni red' in q_norm or 'minibus' in q_norm or 'avtobus' in q_norm or 'kopivnik' in q_norm:
         return 'transport'
+    if 'komunaln' in q_norm and 'prispev' in q_norm:
+        return 'komunalni_prispevek'
+    if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm):
+        return 'camp'
     return 'general'
 
 # ------------------------------------------------------------------------------
@@ -241,7 +224,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v43.0 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v44.0 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -358,7 +341,6 @@ Samostojno vprašanje:"""
         if not relevantne_zapore:
             return "Po podatkih portala promet.si na območju občine Rače-Fram trenutno ni zabeleženih del na cesti, zapor ali zastojev."
 
-        # deduplikacija
         unique = [dict(t) for t in {tuple(sorted(x.items())) for x in relevantne_zapore}]
         porocilo = "Našel sem naslednje **trenutne** informacije o dogodkih na cesti (vir: promet.si):\n\n"
         for z in unique:
@@ -367,56 +349,59 @@ Samostojno vprašanje:"""
 
     # ---------- odpadki ----------
     def _build_location_phrases(self, vprasanje_norm: str) -> List[str]:
-        # odstrani besede tipa odpadkov in nepomembne stop-besede
         waste_stop = set()
         for variants in cfg.WASTE_VARIANTS.values():
             for v in variants:
                 waste_stop.add(normalize_text(v))
-        extra_stop = {"kdaj","je","naslednji","odvoz","odpadkov","smeti","na","v","za","kako","kateri","katera","kaj",
-                      "rumene","rumena","kanta","kante","termini","termine","urnik","urniki"}
+        extra_stop = {"kdaj","je","naslednji","odvoz","odpadkov","smeti","urnik","urniki","termini","termine",
+                      "kako","kateri","katera","kaj","koga","kje","kam"} \
+                      | set(normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split()) \
+                      | set(normalize_text(" ".join(cfg.GENERIC_PREPS)).split())
         stop = waste_stop.union(extra_stop)
 
-        toks = [t for t in re.split(r'[,\s]+', vprasanje_norm) if t and t not in stop]
-        # gradimo n-grame 3->2->1, ohranimo vrstni red in odstranimo dvojnike
+        toks = [t for t in re.split(r'[,\s]+', vprasanje_norm) if t and t not in stop and len(t) >= 3]
         phrases = []
-        for size in (3,2,1):
+        # n-grami 3->2->1, a enobesedne dodamo šele na koncu, da ne prevladajo (npr. 'pod')
+        for size in (3,2):
             for i in range(len(toks)-size+1):
                 p = " ".join(toks[i:i+size]).strip()
                 if p and p not in phrases:
                     phrases.append(p)
+        # enobesedne (dolžine >=4) dodaj na koncu
+        for t in toks:
+            if len(t) >= 4 and t not in phrases:
+                phrases.append(t)
         return phrases
 
     def _match_streets(self, phrases: List[str], all_streets: List[str]) -> Tuple[List[Dict[str,Any]], List[Dict[str,Any]]]:
         exact, fuzzy = [], []
         for phrase in phrases:
             for street in all_streets:
-                if normalize_text(street) == normalize_text(phrase) or sl_variant_eq(phrase, street) or street_phrase_matches(phrase, street):
+                if street_phrase_matches(phrase, street, allow_substrings=True, threshold=0.90):
                     exact.append({"phrase": phrase, "street": street, "score": 1.0})
                 else:
-                    sc = _ratio(normalize_text(phrase), normalize_text(street))
-                    if sc >= 0.88:
-                        fuzzy.append({"phrase": phrase, "street": street, "score": sc})
-        # sort fuzzy by score
+                    # fuzzy samo, če sta fraza in ulica oba večbesedna ali beseda dolžine >=5
+                    if (len(phrase.split()) > 1 or len(phrase) >= 5):
+                        sc = _ratio(normalize_text(phrase), normalize_text(street))
+                        if sc >= 0.92:
+                            fuzzy.append({"phrase": phrase, "street": street, "score": sc})
         fuzzy.sort(key=lambda x: x['score'], reverse=True)
         return exact, fuzzy
 
     def _pick_best_street(self, exact: List[Dict[str,Any]], fuzzy: List[Dict[str,Any]]) -> Optional[str]:
         if exact:
-            # če je več exact, vzemi najdaljšo frazo (bolj specifično)
             exact.sort(key=lambda x: (len(x["phrase"]), x["score"]), reverse=True)
             return exact[0]["street"]
         if fuzzy:
             return fuzzy[0]["street"]
         return None
 
-    def _format_dates_for_tip(self, street_display: str, tip_odpadka: str, obmocje: str, doc_text: str, only_next: bool) -> Optional[str]:
+    def _format_dates_for_tip(self, street_display: str, tip_odpadka: str, doc_text: str, only_next: bool) -> Optional[str]:
         dates = parse_dates_from_text(doc_text)
         if not dates:
             return None
         if only_next:
-            # poišči prvi datum >= danes
             today = datetime.now().date()
-            # poskus: brez leta v doc -> vzemi tekoče leto
             cand = None
             for d in dates:
                 try:
@@ -443,41 +428,32 @@ Samostojno vprašanje:"""
         vprasanje_norm = normalize_text(uporabnikovo_vprasanje)
         contains_naslednji = "naslednji" in vprasanje_norm
 
-        # preberi tip iz vprašanja ali iz spomina (če uporabnik reče npr. 'kaj pa naslednji?')
         iskani_tip = get_canonical_waste(vprasanje_norm)
         if not iskani_tip and contains_naslednji and stanje.get('zadnji_tip'):
             iskani_tip = stanje['zadnji_tip']
 
-        # Izgradi lokacijske fraze iz vprašanja
         phrases = self._build_location_phrases(vprasanje_norm)
-        # Če v tem vprašanju NI lokacije, poskusi iz spomina (zadnja ulica)
+        explicit_from_memory = False
         if not phrases and stanje.get('zadnja_lokacija_display'):
             phrases = [stanje['zadnja_lokacija_display']]
             explicit_from_memory = True
-        else:
-            explicit_from_memory = False
 
-        # Ali je uporabnik ekspliciten glede ulice? (cesta/ulica/pot ali 2+ besedi)
-        explicit_street_mode = any(w in vprasanje_norm.split() for w in normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split()) or any(len(p.split())>=2 for p in phrases) or explicit_from_memory
+        explicit_street_mode = any(len(p.split())>=2 for p in phrases) or explicit_from_memory
 
         vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
         if not vsi_urniki or not vsi_urniki.get('ids'):
             return "V bazi znanja ni podatkov o urnikih."
 
-        # Zberi vse ulice/območja iz metapodatkov
-        kandidati = []  # kandidat = {doc, meta, matched_street (optional), score}
+        kandidati = []
         for i in range(len(vsi_urniki['ids'])):
             meta = vsi_urniki['metadatas'][i]
             doc_text = vsi_urniki['documents'][i]
             tip_meta = meta.get('tip_odpadka', '')
-            obm = meta.get('obmocje', '')
-            streets = extract_locations_from_naselja(meta.get('naselja', ''))  # seznam ulic + naselij
+            streets = extract_locations_from_naselja(meta.get('naselja', ''))
 
-            # filtriraj po tipu, če je iskani_tip podan
             if iskani_tip and get_canonical_waste(tip_meta) != iskani_tip:
                 continue
 
-            # ujemanje ulic
             exact, fuzzy = self._match_streets(phrases, streets)
             if exact or fuzzy:
                 best_street = self._pick_best_street(exact, fuzzy)
@@ -485,97 +461,60 @@ Samostojno vprašanje:"""
                     sc = 1.0 if exact else (fuzzy[0]['score'] if fuzzy else 0.0)
                     kandidati.append({
                         "doc": doc_text,
-                        "meta": meta,
                         "matched_street": best_street,
                         "score": sc,
-                        "tip": tip_meta,
-                        "obmocje": obm
-                    })
-                    continue
-
-            # če NI eksplicitno o ulici: dovolimo ujemanje po območju (fallback)
-            if not explicit_street_mode:
-                # preprosto: če katera fraza "fuzzy" zadane obmocje
-                if any(_ratio(normalize_text(p), normalize_text(obm)) >= 0.9 for p in phrases if p):
-                    kandidati.append({
-                        "doc": doc_text,
-                        "meta": meta,
-                        "matched_street": None,
-                        "score": 0.7,
-                        "tip": tip_meta,
-                        "obmocje": obm
+                        "tip": get_canonical_waste(tip_meta) or tip_meta
                     })
 
-        # Če ni kandidatov:
         if not kandidati:
-            if explicit_street_mode:
-                # če je manjkajoč tip, najprej vprašamo po tipu
+            if any(p for p in phrases):  # ulica je podana -> vprašaj za tip ali vrni, da ni
                 if not iskani_tip:
-                    # shrani lokacijo v spomin (za naslednje vprašanje npr. "biološki?")
-                    if phrases:
-                        stanje['zadnja_lokacija_display'] = phrases[0].title()
-                        stanje['zadnja_lokacija_norm'] = normalize_text(phrases[0])
-                    stanje['namen'] = 'odpadki'
-                    stanje['caka_na'] = 'tip'
-                    return "Kateri tip odpadkov te zanima? (bio, mešani komunalni, embalaža, papir, steklo)"
-                return f"Za navedeno ulico/lokacijo žal nisem našel urnika za izbrani tip."
-            else:
-                # neeksplicitno vprašanje: če nimamo ne lokacije ne tipa, vprašaj
-                if not phrases and not iskani_tip:
-                    stanje['namen'] = 'odpadki'
-                    stanje['caka_na'] = 'lokacija'
-                    return "Za katero ulico ali območje te zanima urnik? (npr. 'Bistriška cesta, Fram')"
-                if not phrases:
-                    stanje['namen'] = 'odpadki'
-                    stanje['caka_na'] = 'lokacija'
-                    return "Katera ulica ali območje? (npr. 'Pod Terasami, Morje')"
-                if not iskani_tip:
-                    stanje['namen'] = 'odpadki'
-                    stanje['caka_na'] = 'tip'
-                    # shrani ulico, da naslednjič deluje 'biološki?'
+                    # shrani lokacijo v spomin
                     stanje['zadnja_lokacija_display'] = phrases[0].title()
                     stanje['zadnja_lokacija_norm'] = normalize_text(phrases[0])
-                    return "Kateri tip odpadkov? (bio, mešani, embalaža, papir, steklo)"
-                return "Za navedeno kombinacijo tipa in lokacije žal nimam urnika."
+                    stanje['namen'] = 'odpadki'
+                    stanje['caka_na'] = 'tip'
+                    return "Kateri tip odpadkov te zanima? (bio, mešani, embalaža, papir, steklo)"
+                return f"Za navedeno ulico žal nisem našel urnika za izbrani tip."
+            # ni lokacije -> vprašaj po lokaciji
+            stanje['namen'] = 'odpadki'
+            stanje['caka_na'] = 'lokacija'
+            return "Za katero ulico te zanima urnik? (npr. 'Bistriška cesta, Fram')"
 
-        # V EXPlicit street mode vrni SAMO najboljšega kandidata (da ne mešamo območij)
         if explicit_street_mode:
             kandidati.sort(key=lambda x: x['score'], reverse=True)
             best = kandidati[0]
             street_disp = (best['matched_street'] or stanje.get('zadnja_lokacija_display') or phrases[0]).title()
-            tip_canon = get_canonical_waste(best['tip']) or best['tip']
-            ans = self._format_dates_for_tip(street_disp, tip_canon, best['obmocje'], best['doc'], contains_naslednji)
+            tip_canon = best['tip']
+            ans = self._format_dates_for_tip(street_disp, tip_canon, best['doc'], contains_naslednji)
             if not ans:
                 return "Žal zate ne najdem datumov v urniku."
-            # osveži spomin
+            # spomin
             stanje['zadnja_lokacija_display'] = street_disp
             stanje['zadnja_lokacija_norm'] = normalize_text(street_disp)
             stanje['zadnji_tip'] = tip_canon
             stanje['namen'] = 'odpadki'
-            if 'caka_na' in stanje:
-                del stanje['caka_na']
+            stanje.pop('caka_na', None)
             return ans
 
-        # NE-ekspl. način: lahko pokažemo več rezultatov, a še vedno filtriranih po tipu
+        # ne-ekspl.: lahko vrnemo več (kratko)
         odgovori = []
-        for k in kandidati[:3]:  # omeji hrup
-            tip_canon = get_canonical_waste(k['tip']) or k['tip']
-            loc_disp = (k['matched_street'] or k['obmocje']).title()
-            msg = self._format_dates_for_tip(loc_disp, tip_canon, k['obmocje'], k['doc'], contains_naslednji)
+        for k in kandidati[:3]:
+            tip_canon = k['tip']
+            loc_disp = k['matched_street'].title()
+            msg = self._format_dates_for_tip(loc_disp, tip_canon, k['doc'], contains_naslednji)
             if msg:
                 odgovori.append(msg)
         if not odgovori:
             return "Žal zate ne najdem datumov v urniku."
-        # spomin (če imamo vsaj en smiselni rezultat, zapomni prvo ulico/območje)
+
         prvi = kandidati[0]
-        if prvi.get('matched_street'):
-            stanje['zadnja_lokacija_display'] = prvi['matched_street'].title()
-            stanje['zadnja_lokacija_norm'] = normalize_text(prvi['matched_street'])
-        stanje['zadnji_tip'] = get_canonical_waste(prvi['tip']) or prvi['tip']
+        stanje['zadnja_lokacija_display'] = prvi['matched_street'].title()
+        stanje['zadnja_lokacija_norm'] = normalize_text(prvi['matched_street'])
+        stanje['zadnji_tip'] = prvi['tip']
         stanje['namen'] = 'odpadki'
-        if 'caka_na' in stanje:
-            del stanje['caka_na']
-        # združi unikate
+        stanje.pop('caka_na', None)
+
         uniq = []
         for o in odgovori:
             if o not in uniq:
@@ -607,19 +546,23 @@ Samostojno vprašanje:"""
 
         extra_directives = []
         if intent == 'who_is_mayor':
-            extra_directives.append("Če vprašanje sprašuje 'kdo je župan', odgovori v ENEM kratkem stavku samo z imenom in funkcijo, brez dodatnih informacij.")
+            extra_directives.append("Če vprašanje sprašuje 'kdo je župan', odgovori v ENEM kratkem stavku samo z imenom in funkcijo, brez dodatkov.")
         if intent == 'contact':
-            extra_directives.append("Če uporabnik prosi za 'kontakt' in v kontekstu ni specifičnega, vrni generični: 'Občina Rače-Fram: 02 609 60 10' in ne navajaj osebnih emailov.")
+            extra_directives.append(f"Če uporabnik prosi za 'kontakt' in v kontekstu ni specifičnega, uporabi generični kontakt: '{cfg.FALLBACK_CONTACT}'.")
         if intent == 'transport':
-            extra_directives.append("Če je vprašanje o prevozu/voznem redu, navedi samo relacijo, ključne ure in kontakt – brez dolgih uvodov ali nerelevantnih podrobnosti.")
+            extra_directives.append("Če je vprašanje o prevozu/voznem redu, navedi samo relacijo, ključne ure in kontakt – brez balasta.")
+        if intent == 'komunalni_prispevek':
+            extra_directives.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kako oddam vlogo (kam), (5) Potrebne priloge/izračun, (6) Kontakt.")
+        if intent == 'camp':
+            extra_directives.append("Za poletni kamp povej datum(e), lokacijo, ceno (če je v kontekstu), in kontakt/URL – kratko in jedrnato.")
 
         directives = "\n".join(extra_directives)
 
         return f"""Ti si 'Virtualni župan občine Rače-Fram'.
 DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.
-DIREKTIVA #2 (OBLIKA): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
+DIREKTIVA #2 (OBLIKA): Odgovor naj bo kratek in pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
 DIREKTIVA #3 (POVEZAVE): Če v kontekstu pod ključem 'POVEZAVA' najdeš URL, ga MORAŠ vključiti kot '[Ime vira](URL)'.
-DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' Namesto polnjenja z nepomembnim.
+DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' Namesto balasta.
 {directives}
 
 --- KONTEKST ---
@@ -636,38 +579,52 @@ ODGOVOR:"""
         if not self.collection:
             return "Oprostite, moja baza znanja trenutno ni na voljo."
 
-        # setup seje
         ses = self.zgodovina_seje.setdefault(session_id, {'zgodovina': [], 'stanje': {}})
         zgodovina = ses['zgodovina']
         stanje = ses['stanje']
 
-        # 1) kratka pravila za posebej pogosta vprašanja, da ne gremo v RAG/LLM po nepotrebnem
         q_norm = normalize_text(uporabnikovo_vprasanje)
+
+        # hard-shortcut: župan
         if re.search(r'\bkdo je\b', q_norm) and ('zupan' in q_norm or 'župan' in q_norm):
-            # jedrnato, brez balasta
             odgovor = "Župan občine Rače-Fram je **Samo Rajšp**."
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             if len(zgodovina) > 4: zgodovina.pop(0)
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            # ko zapustimo “odpadki”, odstrani lepljivost
+            if stanje.get('namen') == 'odpadki' and not stanje.get('caka_na'):
+                stanje.pop('namen', None)
             return odgovor
 
-        # 2) preoblikuj za kontekst
+        # preoblikovanje
         pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
         vprasanje_lower = normalize_text(pametno_vprasanje)
 
-        # 3) usmerjanje
-        if any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_ODPADKI) or stanje.get('namen') == 'odpadki' or 'naslednji' in vprasanje_lower:
+        # domena detekcija
+        is_waste_query = any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_ODPADKI) or (get_canonical_waste(vprasanje_lower) is not None) or ('naslednji' in vprasanje_lower)
+        is_traffic_query = any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_PROMET)
+        waste_followup_needed = (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip'))
+
+        if is_waste_query or waste_followup_needed:
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
-        elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_PROMET):
+        elif is_traffic_query:
+            # ko zapustimo “odpadki”, odstrani lepljivost
+            if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
+                stanje.pop('namen', None)
+                stanje.pop('caka_na', None)
             odgovor = self.preveri_zapore_cest()
         else:
+            # čist izhod iz “odpadki”, če ni več namena
+            if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
+                stanje.pop('namen', None)
+                stanje.pop('caka_na', None)
             prompt = self._zgradi_rag_prompt(pametno_vprasanje, zgodovina)
             if not prompt:
                 odgovor = "Žal o tej temi nimam nobenih informacij."
             else:
                 odgovor = self._call_llm(prompt)
 
-        # 4) beleženje in kratek spomin (če je šlo za odpadke, spomin je že osvežen v handlerju)
+        # beleženje
         zgodovina.append((uporabnikovo_vprasanje, odgovor))
         if len(zgodovina) > 4:
             zgodovina.pop(0)
