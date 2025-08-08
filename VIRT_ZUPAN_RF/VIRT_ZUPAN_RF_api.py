@@ -49,8 +49,8 @@ class Config:
     REQUIRED_ENVS: Tuple[str, ...] = ("OPENAI_API_KEY", "NAP_USERNAME", "NAP_PASSWORD")
 
     KLJUCNE_ODPADKI: Tuple[str, ...] = ("smeti", "odpadki", "odvoz", "odpavkov", "komunala")
-    KLJUCNE_PROMET: Tuple[str, ...] = ("cesta", "ceste", "cesti", "promet", "zastoj", "gneča", "kolona", "zapora", "zapore")
-    PROMET_FILTER: Tuple[str, ...] = ("rače", "fram", "slivnica", "brunšvik", "podova", "morje", "hoče", "r2-430", "r3-711", "g1-2", "priključek slivnica", "razcep slivnica", "letališče maribor", "odcep za rače")
+    KLJUCNE_PROMET: Tuple[str, ...]  = ("cesta", "ceste", "cesti", "promet", "zastoj", "gneča", "kolona", "zapora", "zapore")
+    PROMET_FILTER: Tuple[str, ...]   = ("rače", "fram", "slivnica", "brunšvik", "podova", "morje", "hoče", "r2-430", "r3-711", "g1-2", "priključek slivnica", "razcep slivnica", "letališče maribor", "odcep za rače")
 
     GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "ceste", "cesti", "ulica", "ulice", "ulici", "pot", "trg", "naselje", "območje")
     GENERIC_PREPS: Tuple[str, ...] = ("na", "v", "za", "ob", "pod", "pri", "nad", "do", "od", "k", "proti")
@@ -67,7 +67,7 @@ class Config:
 
     # Fallbacki za povezave
     VLOGA_ZAPORA_FALLBACK_URL: str = "https://www.race-fram.si/objava/400297"
-    GRADBENO_OFFICIAL_URL: str = "https://e-uprava.gov.si/si/podrocja/nepremicnine-in-okolje/nepremicnine-stavbe/gradbeno-dovoljenje.html?lang=si"
+    GRADBENO_OFFICIAL_URL: str     = "https://e-uprava.gov.si/si/podrocja/nepremicnine-in-okolje/nepremicnine-stavbe/gradbeno-dovoljenje.html?lang=si"
 
     def __post_init__(self):
         object.__setattr__(self, 'CHROMA_DB_PATH', os.path.join(self.DATA_DIR, "chroma_db"))
@@ -116,8 +116,8 @@ def gen_street_keys(name: str) -> List[str]:
     keys = {base}
     if base.endswith("ska"): keys.add(base[:-3] + "ski")
     if base.endswith("ski"): keys.add(base[:-3] + "ska")
-    if base.endswith("a"): keys.add(base[:-1] + "i")
-    if base.endswith("i"): keys.add(base[:-1] + "a")
+    if base.endswith("a"):   keys.add(base[:-1] + "i")
+    if base.endswith("i"):   keys.add(base[:-1] + "a")
     return [k for k in keys if k]
 
 def parse_dates_from_text(text: str) -> List[str]:
@@ -164,14 +164,18 @@ def extract_locations_from_naselja(field: str) -> List[str]:
 def tokens_from_text(s: str) -> set:
     return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s or "")) if len(t) > 2}
 
+def extract_year_from_query(q_norm: str) -> Optional[int]:
+    yrs = re.findall(r'\b(20\d{2})\b', q_norm)
+    return int(yrs[0]) if yrs else None
+
 # URL pravila po intentih
 INTENT_URL_RULES: Dict[str, Dict[str, set]] = {
     "komunalni_prispevek": {"must": {"komunalni", "prispevek"}, "ban": set()},
     "gradbeno":            {"must": {"gradben", "dovoljen"},   "ban": set()},
     "camp":                {"must": {"poletni", "tabor"} | {"varstvo", "pocitnisko", "počitnisko"}, "ban": set()},
     "fram_info":           {"must": {"fram"}, "ban": {"pgd", "gasil"}},
-    # nova pravila – vloga zapora ceste (ban promet/nap/geojson)
     "vloga_zapora":        {"must": {"zapora", "cest", "vloga", "obrazec", "dovoljen", "prijav"}, "ban": {"promet", "geojson", "nap", "roadworks", "b2b"}},
+    "awards":              {"must": {"nagrada", "petica", "nagrajen", "dobitnik", "prejemnik"}, "ban": set()},
 }
 
 def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
@@ -209,10 +213,13 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
-    # GASILCI
+    if ('županov' in q_norm or 'zupanov' in q_norm or 'nagrada' in q_norm or 'petica' in q_norm or 'nagrajen' in q_norm or 'dobitnik' in q_norm or 'prejemnik' in q_norm):
+        return 'awards'
     if 'gasil' in q_norm or 'pgd' in q_norm:
+        if 'povelj' in q_norm:  # poveljnik/poveljniški
+            return 'gasilci_poveljstvo'
         return 'gasilci'
-    if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben']):
+    if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben', 'pgd', 'gasil', 'nagrada', 'petica']):
         return 'fram_info'
     return 'general'
 
@@ -222,7 +229,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v48.3 (vloga_zapora fix) inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v49.0 (awards+gasilci+poveljstvo+zapora fix) inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -351,7 +358,7 @@ Samostojno vprašanje:"""
             porocilo += f"- **Cesta:** {z.get('cesta', 'Ni podatka')}\n  **Opis:** {z.get('opis', 'Ni podatka')}\n\n"
         return porocilo.strip()
 
-    # ---- Odpadki: indeks (PUŠČENO NEDOTAKNJENO)
+    # ---- Odpadki: indeks
     def _build_waste_indexes(self) -> None:
         logger.info("Gradim indekse za odpadke …")
         if not self.collection:
@@ -382,7 +389,7 @@ Samostojno vprašanje:"""
         self._street_keys_list = list(self._street_index.keys())
         logger.info(f"Indeks: {len(self._street_keys_list)} uličnih ključev, {len(self._area_type_docs)} (območje,tip).")
 
-    # ---- Odpadki: iskanje (PUŠČENO NEDOTAKNJENO)
+    # ---- Odpadki: iskanje
     def _best_street_key_for_query(self, phrases: List[str]) -> Optional[str]:
         for ph in phrases:
             for key in gen_street_keys(ph):
@@ -525,13 +532,13 @@ Samostojno vprašanje:"""
         if not self.collection:
             return "Podatkov trenutno nimam."
 
-        query = "PGD gasilsko društvo Rače Fram Podova Gorica kontakt telefon email naslov"
-        res = self.collection.query(query_texts=[query], n_results=25, include=["documents", "metadatas"])
+        query = "PGD gasilsko društvo Rače Fram Podova Spodnja Zgornja Gorica kontakt telefon email naslov"
+        res = self.collection.query(query_texts=[query], n_results=30, include=["documents", "metadatas"])
         docs = res.get('documents', [[]])[0] if res else []
         metas = res.get('metadatas', [[]])[0] if res else []
 
         name_pat = re.compile(r'\b(?:pgd|prostovoljno\s+gasilsko\s+druš[tv]o)\s+([a-z0-9\s\-čšžćđ]+)', re.IGNORECASE)
-        contact_pat = re.compile(r'(?:kontaktna\s*oseba|predsednik|poveljnik)\s*:\s*(.+)', re.IGNORECASE)
+        contact_pat = re.compile(r'(?:kontaktna\s*oseba|predsednik)\s*:\s*(.+)', re.IGNORECASE)
         phone_pat = re.compile(r'(?:\+?\s*386|0)\s*\d(?:[\s/\-]?\d){5,}', re.IGNORECASE)
         email_pat = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
         addr_pat = re.compile(r'(?:naslov|sede[žz])\s*:\s*(.+)', re.IGNORECASE)
@@ -569,6 +576,7 @@ Samostojno vprašanje:"""
                     for m in addr_pat.findall(ln):
                         current["address"].add(m.strip())
 
+        # zagotovimo vsa društva
         must_have = ["PGD Rače", "PGD Fram", "PGD Podova", "PGD Spodnja In Zgornja Gorica"]
         for nm in must_have:
             entries.setdefault(nm, {"name": nm, "contact": set(), "phone": set(), "email": set(), "address": set()})
@@ -593,15 +601,77 @@ Samostojno vprašanje:"""
                 line += " — " + "; ".join(details)
             out_lines.append(line)
 
-        out_lines.append("\nČe želiš, lahko za posamezno društvo poiščem še **poveljniške podatke** ali povezavo na njihovo stran.")
+        out_lines.append("\nČe želiš, lahko za posamezno društvo poiščem še **poveljniške podatke** (poveljnik, namestnik, predsednik).")
         return "\n".join(out_lines)
 
-    # ---- VLOGA ZA ZAPORO CESTE (NOVO)
-    def obravnavaj_vloga_zapora(self, q_norm: str) -> str:
-        # Najprej poskusimo najti relevanten URL v bazi
+    # ---- GASILCI: poveljniški podatki (izlušči samo poveljstvo)
+    def obravnavaj_gasilci_poveljniski(self) -> str:
         if not self.collection:
-            return f"Vlogo za zaporo ceste najdeš tukaj: {cfg.VLOGA_ZAPORA_FALLBACK_URL}"
+            return "Podatkov trenutno nimam."
+        query = "PGD poveljnik namestnik predsednik kontakt e-pošta telefon Rače Fram Podova Spodnja Zgornja Gorica"
+        res = self.collection.query(query_texts=[query], n_results=30, include=["documents", "metadatas"])
+        docs = res.get('documents', [[]])[0] if res else []
 
+        name_pat = re.compile(r'\b(?:pgd|prostovoljno\s+gasilsko\s+druš[tv]o)\s+([a-z0-9\s\-čšžćđ]+)', re.IGNORECASE)
+        poveljnik_pat = re.compile(r'\bpoveljnik\b\s*:\s*(.+)', re.IGNORECASE)
+        namestnik_pat = re.compile(r'\bnamestnik\b\s*:\s*(.+)', re.IGNORECASE)
+        predsednik_pat = re.compile(r'\bpredsednik\b\s*:\s*(.+)', re.IGNORECASE)
+        phone_pat = re.compile(r'(?:\+?\s*386|0)\s*\d(?:[\s/\-]?\d){5,}', re.IGNORECASE)
+        email_pat = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+
+        def canon_name(raw: str) -> str:
+            raw = raw.strip()
+            raw = re.sub(r'\s+', ' ', raw)
+            raw = re.split(r'[,\n]|  ', raw)[0]
+            disp = raw.title()
+            if not disp.lower().startswith("pgd "):
+                disp = "PGD " + disp
+            return disp
+
+        data: Dict[str, Dict[str, Any]] = {}
+        for d in docs:
+            if not d:
+                continue
+            current = None
+            for line in d.splitlines():
+                ln = line.strip()
+                if not ln:
+                    continue
+                mname = name_pat.search(ln)
+                if mname:
+                    nm = canon_name(mname.group(1))
+                    current = data.setdefault(nm, {"poveljnik": set(), "namestnik": set(), "predsednik": set(), "telefon": set(), "email": set()})
+                if current:
+                    for m in poveljnik_pat.findall(ln): current["poveljnik"].add(m.strip())
+                    for m in namestnik_pat.findall(ln): current["namestnik"].add(m.strip())
+                    for m in predsednik_pat.findall(ln): current["predsednik"].add(m.strip())
+                    for m in phone_pat.findall(ln):     current["telefon"].add(re.sub(r'\s+', ' ', m.strip()))
+                    for m in email_pat.findall(ln):     current["email"].add(m.strip())
+
+        must_have = ["PGD Rače", "PGD Fram", "PGD Podova", "PGD Spodnja In Zgornja Gorica"]
+        for nm in must_have:
+            data.setdefault(nm, {"poveljnik": set(), "namestnik": set(), "predsednik": set(), "telefon": set(), "email": set()})
+
+        lines = ["**Poveljniški podatki gasilskih društev**:"]
+        for nm in sorted(data.keys()):
+            e = data[nm]
+            parts = []
+            if e["poveljnik"]: parts.append("poveljnik: " + ", ".join(sorted(e["poveljnik"])))
+            if e["namestnik"]: parts.append("namestnik: " + ", ".join(sorted(e["namestnik"])))
+            if e["predsednik"]: parts.append("predsednik: " + ", ".join(sorted(e["predsednik"])))
+            if e["telefon"]:   parts.append("telefon: " + ", ".join(sorted(e["telefon"])))
+            if e["email"]:     parts.append("e-pošta: " + ", ".join(sorted(e["email"])))
+            line = f"- **{nm}**"
+            if parts: line += " — " + "; ".join(parts)
+            lines.append(line)
+
+        lines.append("\nČe želiš, lahko poiščem še neposredne povezave do objav društev.")
+        return "\n".join(lines)
+
+    # ---- VLOGA ZA ZAPORO CESTE
+    def obravnavaj_vloga_zapora(self, q_norm: str) -> str:
+        if not self.collection:
+            return f"**Vloga za zaporo ceste**: {cfg.VLOGA_ZAPORA_FALLBACK_URL}\n\nZa pomoč: {cfg.FALLBACK_CONTACT}"
         q_tokens = tokens_from_text(q_norm)
         res = self.collection.query(
             query_texts=["vloga za zaporo ceste obrazec dovoljenje zapora ceste"],
@@ -612,25 +682,96 @@ Samostojno vprašanje:"""
         metas = res.get('metadatas', [[]])[0] if res else []
 
         chosen_url = None
-        chosen_title = "Vloga za zaporo ceste"
         for doc, meta in zip(docs, metas):
             url = (meta.get('source_url') or "").strip()
             if url and url_is_relevant(url, doc, q_tokens, "vloga_zapora"):
                 chosen_url = url
-                if meta.get('source'):
-                    chosen_title = meta['source']
                 break
-
         if not chosen_url:
             chosen_url = cfg.VLOGA_ZAPORA_FALLBACK_URL
 
         return (
             f"**Vloga za zaporo ceste**: {chosen_url}\n\n"
-            f"- Na povezavi najdeš **obrazec** in **navodila** za oddajo.\n"
-            f"- Če potrebuješ pomoč pri izpolnjevanju, pokliči **{cfg.FALLBACK_CONTACT}**."
+            f"- Na povezavi so **obrazec** in **navodila** za oddajo.\n"
+            f"- Dodatna pomoč: **{cfg.FALLBACK_CONTACT}**."
         )
 
-    # ---- RAG
+    # ---- NAGRADE / NAGRAJENCI (županova nagrada/petica …)
+    def obravnavaj_nagrade(self, q_norm: str) -> str:
+        if not self.collection:
+            return "Podatkov o nagradah trenutno nimam."
+        year = extract_year_from_query(q_norm)
+        award_tokens = []
+        if 'petic' in q_norm: award_tokens.append('petica')
+        if 'nagrad' in q_norm: award_tokens.append('nagrada')
+        if 'županov' in q_norm or 'zupanov' in q_norm:
+            if 'petic' in q_norm: award_tokens.append('županova petica')
+            if 'nagrad' in q_norm: award_tokens.append('županova nagrada')
+        if not award_tokens:
+            award_tokens = ['nagrada', 'petica']
+
+        # poizvedba v bazi
+        q_parts = ["nagrajenci dobitnik prejemnik občine rače-fram"]
+        if year: q_parts.append(str(year))
+        q_parts.extend(award_tokens)
+        query = " ".join(q_parts)
+
+        res = self.collection.query(query_texts=[query], n_results=20, include=["documents", "metadatas"])
+        docs = res.get('documents', [[]])[0] if res else []
+        metas = res.get('metadatas', [[]])[0] if res else []
+
+        # parser: izvleci vrstice, kjer se pojavita leto in tip
+        names = []
+        picked_lines = []
+        year_pat = re.compile(fr'\b{year}\b') if year else None
+        token_pats = [re.compile(t, re.IGNORECASE) for t in award_tokens] if award_tokens else []
+
+        bullet_pat = re.compile(r'^\s*(?:[-•–]\s*)?([A-ZŠŽČ][^,\n;]+?)(?:\s*[-–:]\s*.*)?$')
+        dobitnik_pat = re.compile(r'dobitnik\w*\s+.*?(?:je|so)\s+([A-ZŠŽČ][^\n,\.]+)', re.IGNORECASE)
+        prejemnik_pat = re.compile(r'prejemnik\w*\s+.*?(?:je|so)\s+([A-ZŠŽČ][^\n,\.]+)', re.IGNORECASE)
+
+        for d in docs:
+            for ln in d.splitlines():
+                ln_norm = normalize_text(ln)
+                if year_pat and not year_pat.search(ln):
+                    # Če je leto eksplicitno zahtevano, upoštevaj samo vrstice s tem letom
+                    continue
+                if token_pats and not any(p.search(ln) for p in token_pats):
+                    continue
+
+                # Poskusi izvleči ime
+                m = dobitnik_pat.search(ln) or prejemnik_pat.search(ln) or bullet_pat.search(ln)
+                if m:
+                    candidate = m.group(1).strip()
+                    # Filtriraj očitne neželene fragmente
+                    if len(candidate.split()) >= 2 and not any(w in candidate.lower() for w in ["nagrada", "petica", "županov", "zupanov", "občina", "obcine", "rače", "fram"]):
+                        names.append(candidate)
+                        picked_lines.append(ln.strip())
+
+        if names:
+            names_uniq = sorted({n.strip(" -–:") for n in names})
+            title = "Županova petica" if any("petica" in t for t in award_tokens) and not any("nagrada" in t for t in award_tokens) else \
+                    ("Županova nagrada" if any("nagrada" in t for t in award_tokens) else "Nagrada")
+            if year:
+                header = f"**{title} — {year}:**"
+            else:
+                header = f"**{title}:**"
+            body = "\n".join(f"- {n}" for n in names_uniq)
+            return f"{header}\n{body}"
+
+        # fallback: vrni vsaj izseke/vir
+        # če ni izluščenih imen, poskusi vrniti link, če obstaja
+        q_tokens = tokens_from_text(q_norm)
+        for doc, meta in zip(docs, metas):
+            url = (meta.get('source_url') or "").strip()
+            if url and url_is_relevant(url, doc, q_tokens, "awards"):
+                kind = "petica" if 'petic' in q_norm else "nagrada"
+                ytxt = f" ({year})" if year else ""
+                return f"Zapis o **županovi {kind}{ytxt}**: {url}"
+
+        return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
+
+    # ---- RAG pomožni (le za “splošna” vprašanja)
     def _strip_past_year_lines(self, text: str, this_year: int) -> str:
         lines = text.splitlines()
         kept = []
@@ -641,19 +782,28 @@ Samostojno vprašanje:"""
             kept.append(ln)
         return "\n".join(kept)
 
-    def _filter_rag_results_by_year(self, docs: List[str], metas: List[Dict[str,Any]], intent: str) -> Tuple[List[str], List[Dict[str,Any]]]:
+    def _filter_rag_results_by_year(self, docs: List[str], metas: List[Dict[str,Any]], intent: str, explicit_year: Optional[int]) -> Tuple[List[str], List[Dict[str,Any]]]:
         this_year = datetime.now().year
         keep_docs, keep_metas = [], []
         for doc, meta in zip(docs, metas):
             combined = f"{doc}\n{json.dumps(meta, ensure_ascii=False)}"
             years = [int(y) for y in re.findall(r'\b(20\d{2})\b', combined)]
+
             if intent == 'camp':
-                if years and max(years) < this_year:
-                    continue
-                doc = self._strip_past_year_lines(doc, this_year)
+                # pri kampu izloči pretekla leta, razen če je leto eksplicitno vprašano
+                if explicit_year:
+                    # če je vprašano preteklo leto, pusti
+                    pass
+                else:
+                    if years and max(years) < this_year:
+                        continue
+                    doc = self._strip_past_year_lines(doc, this_year)
             else:
-                if years and max(years) < this_year:
-                    continue
+                # pri ostalem: če je leto eksplicitno v vprašanju, ne filtriraj po "staro/novo"
+                if not explicit_year:
+                    if years and max(years) < this_year:
+                        continue
+
             keep_docs.append(doc); keep_metas.append(meta)
         return keep_docs, keep_metas
 
@@ -664,6 +814,7 @@ Samostojno vprašanje:"""
 
         q_norm = normalize_text(vprasanje)
         intent = detect_intent_qna(q_norm)
+        explicit_year = extract_year_from_query(q_norm)
         q_tokens = tokens_from_text(q_norm)
 
         results = self.collection.query(query_texts=[q_norm], n_results=8, include=["documents", "metadatas"])
@@ -678,8 +829,8 @@ Samostojno vprašanje:"""
             filtered_docs.append(d); filtered_metas.append(m)
         docs, metas = filtered_docs, filtered_metas
 
-        # filter po letu
-        docs, metas = self._filter_rag_results_by_year(docs, metas, intent)
+        # filter po letih (upoštevaj explicit_year)
+        docs, metas = self._filter_rag_results_by_year(docs, metas, intent, explicit_year)
 
         # filtriranje/link sanity
         context_parts = []
@@ -705,18 +856,18 @@ Samostojno vprašanje:"""
         if intent == 'komunalni_prispevek':
             extra.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kam oddam vlogo, (5) Priloge/izračun, (6) Kontakt, (7) Povezava.")
         if intent == 'gradbeno':
-            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost) in vključi le relevantne povezave, če so v kontekstu. Če v odgovoru ni povezave, na koncu dodaj uradno eUprava povezavo (glej sistem).")
+            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost) in vključi le relevantne povezave, če so v kontekstu. Če jih ni, dodaj uradno eUprava povezavo.")
         if intent == 'camp':
-            extra.append("Za poletni kamp navedi samo aktualno leto: datume, lokacijo, ceno (če je), in kontakt/URL – brez omembe preteklih let.")
+            extra.append("Za poletni kamp navedi samo aktualno leto (razen če je uporabnik izrecno vprašal po preteklem letu).")
         if intent == 'fram_info':
             extra.append("Za splošne informacije o Framu navedi kratek opis (lokacija, zgodovina, znamenitosti) in vključi povezavo samo če je neposredno o kraju Fram.")
         if intent == 'vloga_zapora':
-            extra.append("Uporabnik želi OBRAZEC/VLOGO za zaporo ceste. Ne poročaj o stanju prometa. Vključi le povezavo do obrazca, če je v kontekstu; sicer pa vrni fallback povezavo (glej sistem).")
+            extra.append("Uporabnik želi OBRAZEC/VLOGO za zaporo ceste. Ne poročaj o stanju prometa. Vključi le povezavo do obrazca, če je v kontekstu; sicer pa vrni fallback povezavo.")
 
         directives = "\n".join(extra)
 
         return f"""Ti si 'Virtualni župan občine Rače-Fram'.
-DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj informacij iz preteklih let.
+DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj starih informacij, razen če je leto izrecno v vprašanju.
 DIREKTIVA #2 (OBLIKA): Odgovor naj bo pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
 DIREKTIVA #3 (POVEZAVE): Če v kontekstu POVEZAVA ni URL, **ne izmišljuj** povezave in je ne dodajaj.
 DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' – brez balasta.
@@ -757,7 +908,7 @@ ODGOVOR:"""
         pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
         vprasanje_lower = normalize_text(pametno_vprasanje)
 
-        # domena / intent
+        # intent
         intent = detect_intent_qna(vprasanje_lower)
 
         # odpadki?
@@ -776,8 +927,12 @@ ODGOVOR:"""
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif intent == 'vloga_zapora':
             odgovor = self.obravnavaj_vloga_zapora(vprasanje_lower)
+        elif intent == 'gasilci_poveljstvo':
+            odgovor = self.obravnavaj_gasilci_poveljniski()
         elif intent == 'gasilci':
             odgovor = self.obravnavaj_gasilci()
+        elif intent == 'awards':
+            odgovor = self.obravnavaj_nagrade(vprasanje_lower)
         elif is_traffic_query:
             if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
                 stanje.pop('namen', None); stanje.pop('caka_na', None)
