@@ -49,7 +49,7 @@ class Config:
     REQUIRED_ENVS: Tuple[str, ...] = ("OPENAI_API_KEY", "NAP_USERNAME", "NAP_PASSWORD")
 
     KLJUCNE_ODPADKI: Tuple[str, ...] = ("smeti", "odpadki", "odvoz", "odpavkov", "komunala")
-    KLJUCNE_PROMET: Tuple[str, ...] = ("cesta", "ceste", "cesti", "promet", "dela", "delo", "zapora", "zapore", "zaprta", "zastoj", "gneča", "kolona")
+    KLJUCNE_PROMET: Tuple[str, ...] = ("cesta", "ceste", "cesti", "promet", "zastoj", "gneča", "kolona", "zapora", "zapore")
     PROMET_FILTER: Tuple[str, ...] = ("rače", "fram", "slivnica", "brunšvik", "podova", "morje", "hoče", "r2-430", "r3-711", "g1-2", "priključek slivnica", "razcep slivnica", "letališče maribor", "odcep za rače")
 
     GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "ceste", "cesti", "ulica", "ulice", "ulici", "pot", "trg", "naselje", "območje")
@@ -64,6 +64,10 @@ class Config:
     })
 
     FALLBACK_CONTACT: str = "Občina Rače-Fram: 02 609 60 10"
+
+    # Fallbacki za povezave
+    VLOGA_ZAPORA_FALLBACK_URL: str = "https://www.race-fram.si/objava/400297"
+    GRADBENO_OFFICIAL_URL: str = "https://e-uprava.gov.si/si/podrocja/nepremicnine-in-okolje/nepremicnine-stavbe/gradbeno-dovoljenje.html?lang=si"
 
     def __post_init__(self):
         object.__setattr__(self, 'CHROMA_DB_PATH', os.path.join(self.DATA_DIR, "chroma_db"))
@@ -166,6 +170,8 @@ INTENT_URL_RULES: Dict[str, Dict[str, set]] = {
     "gradbeno":            {"must": {"gradben", "dovoljen"},   "ban": set()},
     "camp":                {"must": {"poletni", "tabor"} | {"varstvo", "pocitnisko", "počitnisko"}, "ban": set()},
     "fram_info":           {"must": {"fram"}, "ban": {"pgd", "gasil"}},
+    # nova pravila – vloga zapora ceste (ban promet/nap/geojson)
+    "vloga_zapora":        {"must": {"zapora", "cest", "vloga", "obrazec", "dovoljen", "prijav"}, "ban": {"promet", "geojson", "nap", "roadworks", "b2b"}},
 }
 
 def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
@@ -193,6 +199,8 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'who_is_mayor'
     if 'kontakt' in q_norm or 'telefon' in q_norm or 'e-mail' in q_norm or 'stevilka' in q_norm or 'številka' in q_norm:
         return 'contact'
+    if ('vloga' in q_norm or 'obrazec' in q_norm or 'dovoljen' in q_norm or 'prijav' in q_norm) and ('zapora' in q_norm and ('cest' in q_norm or 'cesta' in q_norm)):
+        return 'vloga_zapora'
     if 'prevoz' in q_norm or 'vozni red' in q_norm or 'minibus' in q_norm or 'avtobus' in q_norm or 'kopivnik' in q_norm:
         return 'transport'
     if 'komunaln' in q_norm and 'prispev' in q_norm:
@@ -201,7 +209,7 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
-    # GASILCI – ujemi vsa vprašanja, ki omenjajo gasilce/PGD
+    # GASILCI
     if 'gasil' in q_norm or 'pgd' in q_norm:
         return 'gasilci'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben']):
@@ -214,7 +222,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v48.2 (gasilci+) inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v48.3 (vloga_zapora fix) inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -517,13 +525,11 @@ Samostojno vprašanje:"""
         if not self.collection:
             return "Podatkov trenutno nimam."
 
-        # Poskusimo najti vse dokumente, kjer se omenjajo PGD/gasilci
         query = "PGD gasilsko društvo Rače Fram Podova Gorica kontakt telefon email naslov"
         res = self.collection.query(query_texts=[query], n_results=25, include=["documents", "metadatas"])
         docs = res.get('documents', [[]])[0] if res else []
         metas = res.get('metadatas', [[]])[0] if res else []
 
-        # Parser
         name_pat = re.compile(r'\b(?:pgd|prostovoljno\s+gasilsko\s+druš[tv]o)\s+([a-z0-9\s\-čšžćđ]+)', re.IGNORECASE)
         contact_pat = re.compile(r'(?:kontaktna\s*oseba|predsednik|poveljnik)\s*:\s*(.+)', re.IGNORECASE)
         phone_pat = re.compile(r'(?:\+?\s*386|0)\s*\d(?:[\s/\-]?\d){5,}', re.IGNORECASE)
@@ -533,7 +539,6 @@ Samostojno vprašanje:"""
         def canon_name(raw: str) -> str:
             raw = raw.strip()
             raw = re.sub(r'\s+', ' ', raw)
-            # odreži na konec vrstice/vejice, da ne povleče preveč
             raw = re.split(r'[,\n]|  ', raw)[0]
             disp = raw.title()
             if not disp.lower().startswith("pgd "):
@@ -542,7 +547,6 @@ Samostojno vprašanje:"""
 
         entries: Dict[str, Dict[str, Any]] = {}
 
-        # Poberi iz dokumentov
         for d in docs:
             if not d:
                 continue
@@ -565,16 +569,14 @@ Samostojno vprašanje:"""
                     for m in addr_pat.findall(ln):
                         current["address"].add(m.strip())
 
-        # Fallback – zagotovi vsa ključna društva v občini
         must_have = ["PGD Rače", "PGD Fram", "PGD Podova", "PGD Spodnja In Zgornja Gorica"]
         for nm in must_have:
             entries.setdefault(nm, {"name": nm, "contact": set(), "phone": set(), "email": set(), "address": set()})
 
-        # Formatiraj odgovor (ne ultra-kratek)
         if not entries:
             return "Žal v bazi nisem našel seznama gasilskih društev."
 
-        out_lines = ["**Gasilska društva v občini Rače-Fram** (z osnovnimi kontakti):"]
+        out_lines = ["**Gasilska društva v občini Rače-Fram** (osnovni kontakti):"]
         for nm in sorted(entries.keys()):
             e = entries[nm]
             contact = (", ".join(sorted(e["contact"])) if e["contact"] else "")
@@ -593,6 +595,40 @@ Samostojno vprašanje:"""
 
         out_lines.append("\nČe želiš, lahko za posamezno društvo poiščem še **poveljniške podatke** ali povezavo na njihovo stran.")
         return "\n".join(out_lines)
+
+    # ---- VLOGA ZA ZAPORO CESTE (NOVO)
+    def obravnavaj_vloga_zapora(self, q_norm: str) -> str:
+        # Najprej poskusimo najti relevanten URL v bazi
+        if not self.collection:
+            return f"Vlogo za zaporo ceste najdeš tukaj: {cfg.VLOGA_ZAPORA_FALLBACK_URL}"
+
+        q_tokens = tokens_from_text(q_norm)
+        res = self.collection.query(
+            query_texts=["vloga za zaporo ceste obrazec dovoljenje zapora ceste"],
+            n_results=10,
+            include=["documents", "metadatas"]
+        )
+        docs = res.get('documents', [[]])[0] if res else []
+        metas = res.get('metadatas', [[]])[0] if res else []
+
+        chosen_url = None
+        chosen_title = "Vloga za zaporo ceste"
+        for doc, meta in zip(docs, metas):
+            url = (meta.get('source_url') or "").strip()
+            if url and url_is_relevant(url, doc, q_tokens, "vloga_zapora"):
+                chosen_url = url
+                if meta.get('source'):
+                    chosen_title = meta['source']
+                break
+
+        if not chosen_url:
+            chosen_url = cfg.VLOGA_ZAPORA_FALLBACK_URL
+
+        return (
+            f"**Vloga za zaporo ceste**: {chosen_url}\n\n"
+            f"- Na povezavi najdeš **obrazec** in **navodila** za oddajo.\n"
+            f"- Če potrebuješ pomoč pri izpolnjevanju, pokliči **{cfg.FALLBACK_CONTACT}**."
+        )
 
     # ---- RAG
     def _strip_past_year_lines(self, text: str, this_year: int) -> str:
@@ -669,11 +705,13 @@ Samostojno vprašanje:"""
         if intent == 'komunalni_prispevek':
             extra.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kam oddam vlogo, (5) Priloge/izračun, (6) Kontakt, (7) Povezava.")
         if intent == 'gradbeno':
-            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost) in vključi le relevantne povezave, če so v kontekstu.")
+            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost) in vključi le relevantne povezave, če so v kontekstu. Če v odgovoru ni povezave, na koncu dodaj uradno eUprava povezavo (glej sistem).")
         if intent == 'camp':
             extra.append("Za poletni kamp navedi samo aktualno leto: datume, lokacijo, ceno (če je), in kontakt/URL – brez omembe preteklih let.")
         if intent == 'fram_info':
             extra.append("Za splošne informacije o Framu navedi kratek opis (lokacija, zgodovina, znamenitosti) in vključi povezavo samo če je neposredno o kraju Fram.")
+        if intent == 'vloga_zapora':
+            extra.append("Uporabnik želi OBRAZEC/VLOGO za zaporo ceste. Ne poročaj o stanju prometa. Vključi le povezavo do obrazca, če je v kontekstu; sicer pa vrni fallback povezavo (glej sistem).")
 
         directives = "\n".join(extra)
 
@@ -719,17 +757,25 @@ ODGOVOR:"""
         pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
         vprasanje_lower = normalize_text(pametno_vprasanje)
 
-        # domena
+        # domena / intent
+        intent = detect_intent_qna(vprasanje_lower)
+
+        # odpadki?
         is_waste_query = any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_ODPADKI) \
                          or (get_canonical_waste(vprasanje_lower) is not None) \
                          or ('naslednji' in vprasanje_lower)
-        is_traffic_query = any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_PROMET)
         waste_followup_needed = (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip'))
 
-        intent = detect_intent_qna(vprasanje_lower)
+        # promet? (pozor: ne, če je to vloga za zaporo!)
+        is_traffic_query = (intent not in ['vloga_zapora']) and any(
+            re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower)
+            for k in cfg.KLJUCNE_PROMET
+        )
 
         if is_waste_query or waste_followup_needed:
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
+        elif intent == 'vloga_zapora':
+            odgovor = self.obravnavaj_vloga_zapora(vprasanje_lower)
         elif intent == 'gasilci':
             odgovor = self.obravnavaj_gasilci()
         elif is_traffic_query:
@@ -744,6 +790,10 @@ ODGOVOR:"""
                 odgovor = "Žal o tej temi nimam nobenih informacij."
             else:
                 odgovor = self._call_llm(prompt)
+
+            # dodatni varni dodatek za gradbeno – eUprava link, če ga ni v odgovoru
+            if intent == 'gradbeno' and (cfg.GRADBENO_OFFICIAL_URL not in odgovor):
+                odgovor += f"\n\n**Uradna navodila (eUprava):** {cfg.GRADBENO_OFFICIAL_URL}"
 
         # beleženje
         zgodovina.append((uporabnikovo_vprasanje, odgovor))
