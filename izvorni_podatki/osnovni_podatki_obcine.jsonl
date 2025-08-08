@@ -1,69 +1,16 @@
-{
-  "polni naziv": {
-    "vrednost": "Občina Rače – Fram",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "matična številka": {
-    "vrednost": "5883611000",
-    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
-  },
-  "davčna številka": {
-    "vrednost": "SI99967079",
-    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
-  },
-  "naslov občine": {
-    "vrednost": "Grajski trg 14, 2327 Rače",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "župan": {
-    "vrednost": "Samo Rajšp",
-    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
-  },
-  "direktorica občinske uprave": {
-    "vrednost": "mag. Karmen Kotnik, univ. dipl. prav.",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "direktorica": {
-    "vrednost": "mag. Karmen Kotnik, univ. dipl. prav.",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "datum izvolitve župana": {
-    "vrednost": "nadomestne lokalne volitve (21.05.23)",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "uradne ure": {
-    "vrednost": "Ponedeljek: 8:00–12:00 in 13:00–15:00; Sreda: 8:00–12:00 in 13:00–17:00; Petek: 8:00–13:00",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "telefon": {
-    "vrednost": "+386 2 609 60 10",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "e-pošta": {
-    "vrednost": "obcina@race-fram.si",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "spletna stran": {
-    "vrednost": "https://www.race-fram.si",
-    "vir": "osnovni_podatki_obcine.json"
-  },
-  "vodja režijskega obrata - Gregor Ovnik": {
-    "vrednost": "Gregor Ovnik, dipl. inž. grad. - telefonska številka 051 815 947",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "tanja kosi": {
-    "vrednost": "Višja svetovalka za okolje, kmetijstvo, turizem in civilno zaščito – tanja.kosi@race-fram.si, 02 609 60 24",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "zadolžen za turizem": {
-    "vrednost": "Za področje turizma je zadolžena višja svetovalka Tanja Kosi.",
-    "vir": "imenik_zaposlenih_in_ure.txt"
-  },
-  "cena polnjenja avtomobila": {
-    "vrednost": "0,25 EUR/kWh + štartnina 0,50 EUR; rezervacija 1,00 EUR",
-    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
-  },
-  "električne polnilnice": {
-    "vrednost": "Na lokacijah Grad Rače in DTV Partizan Fram.",
-    "vir": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt"
-
+{"text": "Polni naziv občine je Občina Rače – Fram.", "metadata": {"source": "osnovni_podatki_obcine.json", "kategorija": "Osnovni podatki", "tema": "Polni naziv"}}
+{"text": "Matična številka Občine Rače-Fram je 5883611000.", "metadata": {"source": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt", "kategorija": "Osnovni podatki", "tema": "Matična številka"}}
+{"text": "Davčna številka Občine Rače-Fram je SI99967079.", "metadata": {"source": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt", "kategorija": "Osnovni podatki", "tema": "Davčna številka"}}
+{"text": "Naslov občine je Grajski trg 14, 2327 Rače.", "metadata": {"source": "osnovni_podatki_obcine.json", "kategorija": "Osnovni podatki", "tema": "Naslov občine"}}
+{"text": "Župan Občine Rače-Fram je Samo Rajšp.", "metadata": {"source": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt", "kategorija": "Osnovni podatki", "tema": "Župan"}}
+{"text": "Direktorica občinske uprave je mag. Karmen Kotnik.", "metadata": {"source": "imenik_zaposlenih_in_ure.txt", "kategorija": "Zaposleni", "tema": "Direktorica občinske uprave"}}
+{"text": "Župan Samo Rajšp je bil izvoljen na nadomestnih lokalnih volitvah 21. maja 2023.", "metadata": {"source": "osnovni_podatki_obcine.json", "kategorija": "Osnovni podatki", "tema": "Datum izvolitve župana"}}
+{"text": "Uradne ure Občine Rače-Fram so:\n- Ponedeljek: 8:00–12:00 in 13:00–15:00\n- Sreda: 8:00–12:00 in 13:00–17:00\n- Petek: 8:00–13:00", "metadata": {"source": "imenik_zaposlenih_in_ure.txt", "kategorija": "Osnovni podatki", "tema": "Uradne ure"}}
+{"text": "Telefonska številka Občine Rače-Fram je +386 2 609 60 10.", "metadata": {"source": "osnovni_podatki_obcine.json", "kategorija": "Kontakt", "tema": "Telefon"}}
+{"text": "E-poštni naslov Občine Rače-Fram je obcina@race-fram.si.", "metadata": {"source": "osnovni_podatki_obcine.json", "kategorija": "Kontakt", "tema": "E-pošta"}}
+{"text": "Uradna spletna stran Občine Rače-Fram je https://www.race-fram.si.", "metadata": {"source": "osnovni_podatki_obcine.json", "source_url": "https://www.race-fram.si", "kategorija": "Osnovni podatki", "tema": "Spletna stran"}}
+{"text": "Vodja režijskega obrata je Gregor Ovnik, dosegljiv na telefonski številki 051 815 947.", "metadata": {"source": "imenik_zaposlenih_in_ure.txt", "kategorija": "Zaposleni", "tema": "Vodja režijskega obrata"}}
+{"text": "Tanja Kosi je višja svetovalka za okolje, kmetijstvo, turizem in civilno zaščito. Njen kontakt je tanja.kosi@race-fram.si in 02 609 60 24.", "metadata": {"source": "imenik_zaposlenih_in_ure.txt", "kategorija": "Zaposleni", "tema": "Tanja Kosi"}}
+{"text": "Za področje turizma je na občini zadolžena višja svetovalka Tanja Kosi.", "metadata": {"source": "imenik_zaposlenih_in_ure.txt", "kategorija": "Pristojnosti", "tema": "Turizem"}}
+{"text": "Cena polnjenja električnega avtomobila na polnilnicah v občini je 0,25 EUR/kWh, z dodano štartnino 0,50 EUR. Rezervacija stane 1,00 EUR.", "metadata": {"source": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt", "kategorija": "Storitve", "tema": "Cena električne polnilnice"}}
+{"text": "Električne polnilnice v občini se nahajajo na lokacijah Grad Rače in DTV Partizan Fram.", "metadata": {"source": "OSNOVNI_PODATKI_OBCINA_RACE_FRAM.txt", "kategorija": "Storitve", "tema": "Lokacija električne polnilnice"}}
