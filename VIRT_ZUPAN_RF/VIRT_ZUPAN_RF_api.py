@@ -50,14 +50,14 @@ class Config:
     PROMET_FILTER: Tuple[str, ...] = ("rače", "fram", "slivnica", "brunšvik", "podova", "morje", "hoče", "r2-430", "r3-711", "g1-2", "priključek slivnica", "razcep slivnica", "letališče maribor", "odcep za rače")
     
     WASTE_VARIANTS: Dict[str, List[str]] = field(default_factory=lambda: {
-        "Biološki odpadki": ["bioloski odpadki", "bioloskih odpakov", "bioloskih odpadkov", "bio", "bioloski", "biološki odpadki"],
+        "Biološki odpadki": ["bioloski odpadki", "bioloskih odpadkov", "bio", "bioloski", "biološki odpadki"],
         "Mešani komunalni odpadki": ["mesani komunalni odpadki", "mesani", "mešani", "komunalni odpadki", "komunalnih odpadkov"],
         "Odpadna embalaža": ["odpadna embalaza", "odpadna embalaža", "embalaza", "embalaža", "embalaže", "rumena kanta", "rumene kante"],
         "Papir in karton": ["papir in karton", "papir", "karton"],
         "Steklena embalaža": ["steklena embalaza", "steklena embalaža", "steklo", "stekla"]
     })
 
-    GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "cesti", "ulica", "ulici", "pot", "trg", "naselje")
+    GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "cesti", "ceste", "ulica", "ulici", "ulice", "pot", "trg", "naselje")
     GENERIC_PREPS: Tuple[str, ...] = ("na", "v", "za", "ob", "pod", "pri", "nad", "do", "od", "k", "proti")
 
     FALLBACK_CONTACT: str = "Občina Rače-Fram: 02 609 60 10"
@@ -106,11 +106,11 @@ def sl_variant_eq(a: str, b: str) -> bool:
     if a_n == b_n:
         return True
     # odreži pogoste slovenske končnice
-    a_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih|ska|sko|ski)$', '', a_n)
-    b_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih|ska|sko|ski)$', '', b_n)
+    a_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih)$', '', a_n)
+    b_stripped = re.sub(r'(ski|ska|sko|skega|skem|skih)$', '', b_n)
     if a_stripped and a_stripped == b_stripped:
         return True
-    # še mehkejše: -a/-i/-o/-e
+    # mehkejše: -a/-i/-o/-e
     if len(a_n) > 2 and len(b_n) > 2 and a_n[:-1] == b_n[:-1] and {a_n[-1], b_n[-1]} <= {"a","i","e","o","u"}:
         return True
     return False
@@ -118,8 +118,8 @@ def sl_variant_eq(a: str, b: str) -> bool:
 def street_phrase_matches(query_phrase: str, street_tok: str, allow_substrings: bool = True, threshold: float = 0.88) -> bool:
     """
     Ujemanje ulice:
-    - odstrani generične besede (cesta, ulica, pot...) in predloge (na, v, pod...).
-    - substring ujemanje je onemogočeno za kratke besede (<4).
+    - odstrani generične besede (cesta/ulica/...) in predloge (na/v/pod/pri/...).
+    - substring ujemanje je onemogočeno za kratke besede (<4), da 'pod' ne ujame 'Podova'.
     """
     generic = set(normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split()) | set(normalize_text(" ".join(cfg.GENERIC_PREPS)).split())
     qp = normalize_text(query_phrase)
@@ -132,7 +132,6 @@ def street_phrase_matches(query_phrase: str, street_tok: str, allow_substrings: 
     street_words = [w for w in st.split() if w not in generic and len(w) >= 3]
 
     if not q_words:
-        # nič pametnega v frazi -> prepusti drugim frazam
         return False
 
     for qw in q_words:
@@ -141,7 +140,6 @@ def street_phrase_matches(query_phrase: str, street_tok: str, allow_substrings: 
             if sl_variant_eq(qw, sw):
                 matched = True
                 break
-            # substring samo za dovolj dolge besede
             if allow_substrings and len(qw) >= 4 and (qw in sw or sw in qw):
                 matched = True
                 break
@@ -185,7 +183,7 @@ def extract_locations_from_naselja(naselja_field: str) -> List[str]:
         if not seg:
             continue
         if seg.endswith(':'):
-            # naselje, a ga ne dodajamo k ulicam (da ne kvarimo ujemanja)
+            # glave (Fram:, Morje:) ignoriramo za ujemanje
             continue
         else:
             for sub in seg.split(','):
@@ -214,7 +212,7 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'transport'
     if 'komunaln' in q_norm and 'prispev' in q_norm:
         return 'komunalni_prispevek'
-    if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm):
+    if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
     return 'general'
 
@@ -224,7 +222,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v44.0 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v45.1 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -361,16 +359,15 @@ Samostojno vprašanje:"""
 
         toks = [t for t in re.split(r'[,\s]+', vprasanje_norm) if t and t not in stop and len(t) >= 3]
         phrases = []
-        # n-grami 3->2->1, a enobesedne dodamo šele na koncu, da ne prevladajo (npr. 'pod')
         for size in (3,2):
             for i in range(len(toks)-size+1):
                 p = " ".join(toks[i:i+size]).strip()
                 if p and p not in phrases:
                     phrases.append(p)
-        # enobesedne (dolžine >=4) dodaj na koncu
         for t in toks:
             if len(t) >= 4 and t not in phrases:
                 phrases.append(t)
+        logger.info(f"Lokacijske fraze: {phrases}")
         return phrases
 
     def _match_streets(self, phrases: List[str], all_streets: List[str]) -> Tuple[List[Dict[str,Any]], List[Dict[str,Any]]]:
@@ -380,7 +377,6 @@ Samostojno vprašanje:"""
                 if street_phrase_matches(phrase, street, allow_substrings=True, threshold=0.90):
                     exact.append({"phrase": phrase, "street": street, "score": 1.0})
                 else:
-                    # fuzzy samo, če sta fraza in ulica oba večbesedna ali beseda dolžine >=5
                     if (len(phrase.split()) > 1 or len(phrase) >= 5):
                         sc = _ratio(normalize_text(phrase), normalize_text(street))
                         if sc >= 0.92:
@@ -421,7 +417,8 @@ Samostojno vprašanje:"""
 
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
         logger.info("Kličem specialista za odpadke...")
-        stanje = self.zgodovina_seje[session_id].setdefault('stanje', {})
+        ses = self.zgodovina_seje.setdefault(session_id, {'zgodovina': [], 'stanje': {}})
+        stanje = ses['stanje']
         if not self.collection:
             return "Baza urnikov ni na voljo."
         
@@ -444,43 +441,74 @@ Samostojno vprašanje:"""
         if not vsi_urniki or not vsi_urniki.get('ids'):
             return "V bazi znanja ni podatkov o urnikih."
 
+        # 1) Zberemo vse ulice + mapo tip/območje
         kandidati = []
+        area_hits = []  # [(obmocje, tip)] kjer se ulica pojavi
         for i in range(len(vsi_urniki['ids'])):
             meta = vsi_urniki['metadatas'][i]
             doc_text = vsi_urniki['documents'][i]
             tip_meta = meta.get('tip_odpadka', '')
+            obmocje = meta.get('obmocje', '')
             streets = extract_locations_from_naselja(meta.get('naselja', ''))
-
-            if iskani_tip and get_canonical_waste(tip_meta) != iskani_tip:
-                continue
 
             exact, fuzzy = self._match_streets(phrases, streets)
             if exact or fuzzy:
                 best_street = self._pick_best_street(exact, fuzzy)
                 if best_street:
-                    sc = 1.0 if exact else (fuzzy[0]['score'] if fuzzy else 0.0)
-                    kandidati.append({
-                        "doc": doc_text,
-                        "matched_street": best_street,
-                        "score": sc,
-                        "tip": get_canonical_waste(tip_meta) or tip_meta
-                    })
+                    area_hits.append((normalize_text(obmocje), get_canonical_waste(tip_meta) or tip_meta))
+                    if not iskani_tip or get_canonical_waste(tip_meta) == iskani_tip:
+                        sc = 1.0 if exact else (fuzzy[0]['score'] if fuzzy else 0.0)
+                        kandidati.append({
+                            "doc": doc_text,
+                            "matched_street": best_street,
+                            "score": sc,
+                            "tip": get_canonical_waste(tip_meta) or tip_meta,
+                            "obmocje": obmocje
+                        })
 
+        logger.info(f"Najdeni kandidati: {len(kandidati)}, area_hits: {area_hits}")
+
+        # 2) Če manjkajo kandidati zaradi tipa, a smo ulico našli v drugem tipu, poskusi fallback po območju
+        if not kandidati and phrases:
+            inferred_area = None
+            if area_hits:
+                # vzemimo najpogostejše območje
+                areas = [a for a, _ in area_hits if a]
+                if areas:
+                    from collections import Counter
+                    inferred_area = Counter(areas).most_common(1)[0][0]
+            if inferred_area and iskani_tip:
+                logger.info(f"Fallback po območju: {inferred_area} za tip {iskani_tip}")
+                for i in range(len(vsi_urniki['ids'])):
+                    meta = vsi_urniki['metadatas'][i]
+                    if normalize_text(meta.get('obmocje','')) == inferred_area and get_canonical_waste(meta.get('tip_odpadka','')) == iskani_tip:
+                        doc_text = vsi_urniki['documents'][i]
+                        street_disp = (phrases[0]).title()
+                        ans = self._format_dates_for_tip(street_disp, iskani_tip, doc_text, contains_naslednji)
+                        if ans:
+                            # spomin
+                            stanje['zadnja_lokacija_display'] = street_disp
+                            stanje['zadnja_lokacija_norm'] = normalize_text(street_disp)
+                            stanje['zadnji_tip'] = iskani_tip
+                            stanje['namen'] = 'odpadki'
+                            stanje.pop('caka_na', None)
+                            return ans
+
+        # 3) Če ni nič – vprašaj po manjkajočem
         if not kandidati:
-            if any(p for p in phrases):  # ulica je podana -> vprašaj za tip ali vrni, da ni
+            if phrases:
                 if not iskani_tip:
-                    # shrani lokacijo v spomin
                     stanje['zadnja_lokacija_display'] = phrases[0].title()
                     stanje['zadnja_lokacija_norm'] = normalize_text(phrases[0])
                     stanje['namen'] = 'odpadki'
                     stanje['caka_na'] = 'tip'
                     return "Kateri tip odpadkov te zanima? (bio, mešani, embalaža, papir, steklo)"
-                return f"Za navedeno ulico žal nisem našel urnika za izbrani tip."
-            # ni lokacije -> vprašaj po lokaciji
+                return "Za navedeno ulico žal nisem našel urnika za izbrani tip."
             stanje['namen'] = 'odpadki'
             stanje['caka_na'] = 'lokacija'
             return "Za katero ulico te zanima urnik? (npr. 'Bistriška cesta, Fram')"
 
+        # 4) Imamo kandidate
         if explicit_street_mode:
             kandidati.sort(key=lambda x: x['score'], reverse=True)
             best = kandidati[0]
@@ -497,7 +525,7 @@ Samostojno vprašanje:"""
             stanje.pop('caka_na', None)
             return ans
 
-        # ne-ekspl.: lahko vrnemo več (kratko)
+        # ne-ekspl.: vrni kratko
         odgovori = []
         for k in kandidati[:3]:
             tip_canon = k['tip']
@@ -522,27 +550,51 @@ Samostojno vprašanje:"""
         return "\n\n".join(uniq)
 
     # ---------- RAG ----------
+    def _filter_rag_results_by_year(self, docs: List[str], metas: List[Dict[str,Any]], intent: str) -> Tuple[List[str], List[Dict[str,Any]]]:
+        """Odstrani dokumente z zastarelim letom. Če dokument ne vsebuje letnice, ga pusti."""
+        this_year = datetime.now().year
+        keep_docs, keep_metas = [], []
+        for doc, meta in zip(docs, metas):
+            years = [int(y) for y in re.findall(r'\b(20\d{2})\b', f"{doc} {json.dumps(meta, ensure_ascii=False)}")]
+            if intent == 'camp':
+                # Za tabor/kamp sprejmi samo leto >= this_year
+                if years and max(years) < this_year:
+                    continue
+            else:
+                # Za ostalo: če so letnice in je max leto < this_year -> ven
+                if years and max(years) < this_year:
+                    continue
+            keep_docs.append(doc)
+            keep_metas.append(meta)
+        return keep_docs, keep_metas
+
     def _zgradi_rag_prompt(self, vprasanje: str, zgodovina: List[Tuple[str, str]]) -> Optional[str]:
         logger.info(f"Gradim RAG prompt za vprašanje: '{vprasanje}'")
         if not self.collection:
             return None
         
+        q_norm = normalize_text(vprasanje)
+        intent = detect_intent_qna(q_norm)
+
         results = self.collection.query(
-            query_texts=[normalize_text(vprasanje)],
-            n_results=5,
+            query_texts=[q_norm],
+            n_results=8,
             include=["documents", "metadatas"]
         )
+        docs = results['documents'][0] if results and results.get('documents') else []
+        metas = results['metadatas'][0] if results and results.get('metadatas') else []
+
+        # Filtriraj po letih (strežniška varovalka)
+        docs, metas = self._filter_rag_results_by_year(docs, metas, intent)
+
         context = ""
-        if results and results.get('documents') and results['documents'][0]:
-            for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-                context += f"--- VIR: {meta.get('source', '?')}\nPOVEZAVA: {meta.get('source_url', '')}\nVSEBINA: {doc}\n\n"
+        for doc, meta in zip(docs, metas):
+            context += f"--- VIR: {meta.get('source', '?')}\nPOVEZAVA: {meta.get('source_url', '')}\nVSEBINA: {doc}\n\n"
         if not context:
             return None
 
         now = datetime.now()
         zgodovina_str = "\n".join([f"U: {q}\nA: {a}" for q, a in zgodovina])
-        q_norm = normalize_text(vprasanje)
-        intent = detect_intent_qna(q_norm)
 
         extra_directives = []
         if intent == 'who_is_mayor':
@@ -554,12 +606,12 @@ Samostojno vprašanje:"""
         if intent == 'komunalni_prispevek':
             extra_directives.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kako oddam vlogo (kam), (5) Potrebne priloge/izračun, (6) Kontakt.")
         if intent == 'camp':
-            extra_directives.append("Za poletni kamp povej datum(e), lokacijo, ceno (če je v kontekstu), in kontakt/URL – kratko in jedrnato.")
+            extra_directives.append("Za poletni kamp povej datum(e), lokacijo, ceno (če je v kontekstu), in kontakt/URL – kratko in jedrnato. Ne omenjaj preteklih let.")
 
         directives = "\n".join(extra_directives)
 
         return f"""Ti si 'Virtualni župan občine Rače-Fram'.
-DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.
+DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj informacij iz preteklih let.
 DIREKTIVA #2 (OBLIKA): Odgovor naj bo kratek in pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
 DIREKTIVA #3 (POVEZAVE): Če v kontekstu pod ključem 'POVEZAVA' najdeš URL, ga MORAŠ vključiti kot '[Ime vira](URL)'.
 DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' Namesto balasta.
@@ -591,7 +643,6 @@ ODGOVOR:"""
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             if len(zgodovina) > 4: zgodovina.pop(0)
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-            # ko zapustimo “odpadki”, odstrani lepljivost
             if stanje.get('namen') == 'odpadki' and not stanje.get('caka_na'):
                 stanje.pop('namen', None)
             return odgovor
@@ -608,13 +659,11 @@ ODGOVOR:"""
         if is_waste_query or waste_followup_needed:
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif is_traffic_query:
-            # ko zapustimo “odpadki”, odstrani lepljivost
             if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
                 stanje.pop('namen', None)
                 stanje.pop('caka_na', None)
             odgovor = self.preveri_zapore_cest()
         else:
-            # čist izhod iz “odpadki”, če ni več namena
             if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
                 stanje.pop('namen', None)
                 stanje.pop('caka_na', None)
