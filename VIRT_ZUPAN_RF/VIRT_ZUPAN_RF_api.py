@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from chromadb.utils import embedding_functions
 from collections import Counter
 from difflib import SequenceMatcher
+from urllib.parse import urlparse
 
 # ------------------------------------------------------------------------------
 # 0) ENV
@@ -87,7 +88,7 @@ logging.basicConfig(
 logger = logging.getLogger("VirtualniZupan")
 
 # ------------------------------------------------------------------------------
-# 3) UTIL: normalizacija, ujemanje, itd.
+# 3) UTIL: normalizacija, ujemanje, URL filtri
 # ------------------------------------------------------------------------------
 def normalize_text(s: Optional[str]) -> str:
     if not s:
@@ -100,19 +101,6 @@ def normalize_text(s: Optional[str]) -> str:
 def _ratio(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
-def sl_variant_eq(a: str, b: str) -> bool:
-    a_n = normalize_text(a)
-    b_n = normalize_text(b)
-    if a_n == b_n:
-        return True
-    a_s = re.sub(r'(ski|ska|sko|skega|skem|skih)$', '', a_n)
-    b_s = re.sub(r'(ski|ska|sko|skega|skem|skih)$', '', b_n)
-    if a_s and a_s == b_s:
-        return True
-    if len(a_n) > 2 and len(b_n) > 2 and a_n[:-1] == b_n[:-1] and {a_n[-1], b_n[-1]} <= {"a","i","e","o","u"}:
-        return True
-    return False
-
 def strip_generics(s: str) -> str:
     tokens = normalize_text(s).split()
     stop = set(normalize_text(" ".join(cfg.GENERIC_STREET_WORDS)).split()) | set(normalize_text(" ".join(cfg.GENERIC_PREPS)).split())
@@ -122,47 +110,35 @@ def strip_generics(s: str) -> str:
 def gen_street_keys(name: str) -> List[str]:
     base = strip_generics(name)
     keys = {base}
-    if base.endswith("ska"):
-        keys.add(base[:-3] + "ski")
-    if base.endswith("ski"):
-        keys.add(base[:-3] + "ska")
-    if base.endswith("a"):
-        keys.add(base[:-1] + "i")
-    if base.endswith("i"):
-        keys.add(base[:-1] + "a")
+    if base.endswith("ska"): keys.add(base[:-3] + "ski")
+    if base.endswith("ski"): keys.add(base[:-3] + "ska")
+    if base.endswith("a"): keys.add(base[:-1] + "i")
+    if base.endswith("i"): keys.add(base[:-1] + "a")
     return [k for k in keys if k]
 
 def parse_dates_from_text(text: str) -> List[str]:
     dates = re.findall(r'(\d{1,2}\.\d{1,2}\.?)', text)
-    seen = set()
-    out = []
+    seen = set(); out = []
     for d in dates:
         dn = d if d.endswith('.') else d + '.'
         if dn not in seen:
-            seen.add(dn)
-            out.append(dn)
+            seen.add(dn); out.append(dn)
     return out
 
 def get_canonical_waste(text: str) -> Optional[str]:
     norm = normalize_text(text)
-    # -- SPECIFIČNO PRED GENERIČNIM --
-    if "stekl" in norm:
-        return "Steklena embalaža"
-    if "papir" in norm or "karton" in norm:
-        return "Papir in karton"
-    if "bio" in norm or "biolo" in norm:
-        return "Biološki odpadki"
+    # specifično pred generičnim
+    if "stekl" in norm: return "Steklena embalaža"
+    if "papir" in norm or "karton" in norm: return "Papir in karton"
+    if "bio" in norm or "biolo" in norm: return "Biološki odpadki"
     if ("komunaln" in norm and "odpadk" in norm) or re.search(r'\bmesan|\bmešani|\bme{s|š}an', norm):
         return "Mešani komunalni odpadki"
-    # generično, samo če ni stekla
     if (("rumen" in norm and "kant" in norm) or "embala" in norm) and "stekl" not in norm:
         return "Odpadna embalaža"
-    # vnaprej definirani sinonimi
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
             if normalize_text(v) in norm:
                 return canon
-    # fuzzy
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
             if _ratio(norm, normalize_text(v)) >= 0.90:
@@ -171,21 +147,50 @@ def get_canonical_waste(text: str) -> Optional[str]:
 
 def extract_locations_from_naselja(field: str) -> List[str]:
     parts = set()
-    if not field:
-        return []
+    if not field: return []
     clean = re.sub(r'\(h\. *št\..*?\)', '', field)
     segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', clean)
     for seg in segments:
         seg = seg.strip()
-        if not seg:
-            continue
-        if seg.endswith(':'):
-            continue
+        if not seg or seg.endswith(':'): continue
         for sub in seg.split(','):
             n = normalize_text(sub)
-            if n:
-                parts.add(n)
+            if n: parts.add(n)
     return list(parts)
+
+def tokens_from_text(s: str) -> set:
+    return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s)) if len(t) > 2}
+
+# URL pravila po intentih
+INTENT_URL_RULES: Dict[str, Dict[str, set]] = {
+    "komunalni_prispevek": {"must": {"komunalni", "prispevek"}, "ban": set()},
+    "gradbeno":            {"must": {"gradben", "dovoljen"},   "ban": set()},
+    "camp":                {"must": {"poletni", "tabor"} | {"varstvo", "pocitnisko", "počitnisko"}, "ban": set()},
+    "fram_info":           {"must": {"fram"}, "ban": {"pgd", "gasil"}},
+}
+
+def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
+    if not url: return False
+    try:
+        u = urlparse(url)
+    except Exception:
+        return False
+    path_tokens = tokens_from_text(u.path)
+    rules = INTENT_URL_RULES.get(intent, {"must": set(), "ban": set()})
+    # ban
+    if rules["ban"] & path_tokens:
+        return False
+    # must – v URL ali vsaj v dokumentu
+    if rules["must"] and not (rules["must"] & path_tokens):
+        doc_tokens = tokens_from_text(doc)
+        if not (rules["must"] & doc_tokens):
+            return False
+    # vsaj nekaj prekrivanja z vprašanjem
+    if not (q_tokens & path_tokens):
+        doc_tokens = tokens_from_text(doc)
+        if len(q_tokens & doc_tokens) < 2:
+            return False
+    return True
 
 def detect_intent_qna(q_norm: str) -> str:
     if re.search(r'\bkdo je\b', q_norm) and ('zupan' in q_norm or 'župan' in q_norm):
@@ -196,8 +201,12 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'transport'
     if 'komunaln' in q_norm and 'prispev' in q_norm:
         return 'komunalni_prispevek'
+    if 'gradben' in q_norm and 'dovoljen' in q_norm:
+        return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
+    if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben']):
+        return 'fram_info'
     return 'general'
 
 # ------------------------------------------------------------------------------
@@ -206,7 +215,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v47.0 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v48.1 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -354,7 +363,7 @@ Samostojno vprašanje:"""
 
             streets = extract_locations_from_naselja(meta.get('naselja', '') or '')
             for s in streets:
-                display = s  # normalizirano
+                display = s
                 for key in gen_street_keys(s):
                     self._street_index.setdefault(key, []).append({
                         "area": area,
@@ -375,13 +384,12 @@ Samostojno vprašanje:"""
         best = (None, 0.0)
         for ph in phrases:
             base = strip_generics(ph)
-            if len(base) < 3:
-                continue
+            if len(base) < 3: continue
             for key in self._street_keys_list:
                 sc = _ratio(base, key)
                 if sc > best[1]:
                     best = (key, sc)
-        if best[0] and best[1] >= 0.88:  # malo znižano, da ujame "mlinski ulic"
+        if best[0] and best[1] >= 0.88:
             return best[0]
         return None
 
@@ -492,7 +500,6 @@ Samostojno vprašanje:"""
                             return ans
                 return "Za navedeno ulico žal nisem našel urnika za izbrani tip."
         else:
-            # brez tipa – izberi prvi vnos (a je zdaj resno težko, ker skoraj vedno zaznamo tip)
             best_entry = entries[0]
 
         tip_canon = get_canonical_waste(best_entry["tip"]) or best_entry["tip"]
@@ -530,8 +537,7 @@ Samostojno vprašanje:"""
             else:
                 if years and max(years) < this_year:
                     continue
-            keep_docs.append(doc)
-            keep_metas.append(meta)
+            keep_docs.append(doc); keep_metas.append(meta)
         return keep_docs, keep_metas
 
     def _zgradi_rag_prompt(self, vprasanje: str, zgodovina: List[Tuple[str, str]]) -> Optional[str]:
@@ -541,12 +547,13 @@ Samostojno vprašanje:"""
 
         q_norm = normalize_text(vprasanje)
         intent = detect_intent_qna(q_norm)
+        q_tokens = tokens_from_text(q_norm)
 
         results = self.collection.query(query_texts=[q_norm], n_results=8, include=["documents", "metadatas"])
         docs = results['documents'][0] if results and results.get('documents') else []
         metas = results['metadatas'][0] if results and results.get('metadatas') else []
 
-        # 1) odstrani odpadke iz RAG, če vprašanje NI o odpadkih
+        # 1) izloči koledarje odpadkov iz RAG, če ni vprašanje o odpadkih
         filtered_docs, filtered_metas = [], []
         for d, m in zip(docs, metas):
             if (m.get('kategorija','') or '').lower() == 'odvoz odpadkov':
@@ -554,12 +561,17 @@ Samostojno vprašanje:"""
             filtered_docs.append(d); filtered_metas.append(m)
         docs, metas = filtered_docs, filtered_metas
 
-        # 2) letni filter (kamp ipd.)
+        # 2) filter po letu
         docs, metas = self._filter_rag_results_by_year(docs, metas, intent)
 
-        context = ""
+        # 3) filtriranje/link sanity: vključi POVEZAVO le, če je relevantna glede na intent in vprašanje
+        context_parts = []
         for doc, meta in zip(docs, metas):
-            context += f"--- VIR: {meta.get('source', '?')}\nPOVEZAVA: {meta.get('source_url', '')}\nVSEBINA: {doc}\n\n"
+            url = meta.get('source_url', '')
+            include_url = url_is_relevant(url, doc, q_tokens, intent)
+            link_line = f"POVEZAVA: {url}" if include_url else "POVEZAVA: "
+            context_parts.append(f"--- VIR: {meta.get('source', '?')}\n{link_line}\nVSEBINA: {doc}\n")
+        context = "\n".join(context_parts).strip()
         if not context:
             return None
 
@@ -575,20 +587,25 @@ Samostojno vprašanje:"""
             extra.append("Če je vprašanje o prevozu/voznem redu, navedi samo relacijo, ključne ure in kontakt – brez nepotrebnih podrobnosti.")
         if intent == 'komunalni_prispevek':
             extra.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kam oddam vlogo, (5) Priloge/izračun, (6) Kontakt, (7) Povezava.")
+        if intent == 'gradbeno':
+            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost), ter vključi LE relevantno povezavo; če ni, povej, da ni v kontekstu.")
         if intent == 'camp':
             extra.append("Za poletni kamp navedi samo aktualno leto: datume, lokacijo, ceno (če je), in kontakt/URL – brez omembe preteklih let.")
+        if intent == 'fram_info':
+            extra.append("Za splošne informacije o Framu navedi kratek opis (lokacija, zgodovina, znamenitosti) in vključi povezavo samo če je neposredno o kraju Fram (ne gasilska društva).")
 
         directives = "\n".join(extra)
 
         return f"""Ti si 'Virtualni župan občine Rače-Fram'.
 DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj informacij iz preteklih let.
 DIREKTIVA #2 (OBLIKA): Odgovor naj bo kratek in pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
-DIREKTIVA #3 (POVEZAVE): Če v kontekstu pod ključem 'POVEZAVA' najdeš URL, ga MORAŠ vključiti kot '[Ime vira](URL)'.
+DIREKTIVA #3 (POVEZAVE): Če v kontekstu POVEZAVA ni URL, **ne izmišljuj** povezave in je ne dodajaj.
 DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' – brez balasta.
 {directives}
 
 --- KONTEKST ---
-{context}---
+{context}
+---
 ZGODOVINA POGOVORA:
 {zgodovina_str}
 ---
