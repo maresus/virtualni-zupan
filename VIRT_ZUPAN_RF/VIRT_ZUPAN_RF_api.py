@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v50.3)
+# VIRT_ZUPAN_RF_api.py  (v50.4)
 
 import os
 import sys
@@ -60,17 +60,17 @@ class Config:
         "r2-430", "r3-711", "g1-2", "priključek slivnica", "razcep slivnica", "letališče maribor", "odcep za rače"
     )
 
-    # Geo: okvir občine + radij
+    # Geo: okvir občine + RADIJ (znižan na 2 km)
     GEO_LAT_MIN: float = 46.38
     GEO_LAT_MAX: float = 46.56
     GEO_LON_MIN: float = 15.54
     GEO_LON_MAX: float = 15.75
     GEO_CENTER_LAT: float = 46.46   # približno med Rače in Fram
     GEO_CENTER_LON: float = 15.64
-    GEO_RADIUS_KM: float = 5.0      # zožan radij na 5 km
+    GEO_RADIUS_KM: float = 2.0      # <-- 2 km
 
     # Promet – “ban” sidra (če se pojavijo in ni v geofencu, izločimo)
-    PROMET_BAN: Tuple[str, ...] = ("spuhlja", "ormož", "ormoz")
+    PROMET_BAN: Tuple[str, ...] = ("spuhlja", "ormož", "ormoz", "pesnica")
 
     GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "ceste", "cesti", "ulica", "ulice", "ulici", "pot", "trg", "naselje", "območje", "obmocje")
     GENERIC_PREPS: Tuple[str, ...] = ("na", "v", "za", "ob", "pod", "pri", "nad", "do", "od", "k", "proti")
@@ -123,7 +123,7 @@ logging.basicConfig(
 logger = logging.getLogger("VirtualniZupan")
 
 # ------------------------------------------------------------------------------
-# 3) UTIL: normalizacija, ujemanje, URL filtri
+# 3) UTIL
 # ------------------------------------------------------------------------------
 def normalize_text(s: Optional[str]) -> str:
     if not s:
@@ -144,8 +144,7 @@ def strip_generics(s: str) -> str:
 
 def gen_street_keys(name: str) -> List[str]:
     base = strip_generics(name)
-    # navzkrižne variante (bistriska/bistriška, ulica/cesta)
-    base = base.replace("bistriska", "bistriska").replace("bistriška", "bistriska")
+    base = base.replace("bistriška", "bistriska")  # normalizacija
     keys = {base}
     if base.endswith("ska"): keys.add(base[:-3] + "ski")
     if base.endswith("ski"): keys.add(base[:-3] + "ska")
@@ -164,7 +163,6 @@ def parse_dates_from_text(text: str) -> List[str]:
 
 def get_canonical_waste(text: str) -> Optional[str]:
     norm = normalize_text(text)
-    # specifično pred generičnim
     if "stekl" in norm: return "Steklena embalaža"
     if "papir" in norm or "karton" in norm: return "Papir in karton"
     if "bio" in norm or "biolo" in norm: return "Biološki odpadki"
@@ -185,17 +183,15 @@ def get_canonical_waste(text: str) -> Optional[str]:
 def extract_locations_from_naselja(field: str) -> List[str]:
     parts = set()
     if not field: return []
-    # odstrani (h. št. ...)
     clean = re.sub(r'\(h\. *št\..*?\)', '', field, flags=re.IGNORECASE)
-    segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', field)
+    segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', clean)
     for seg in segments:
         seg = seg.strip()
         if not seg or seg.endswith(':'): continue
         for sub in seg.split(','):
             n = normalize_text(sub)
             if n:
-                # normaliziraj diakritiko Bistriška/Bistriska
-                n = n.replace("bistriska", "bistriska")
+                n = n.replace("bistriška", "bistriska")
                 parts.add(n)
     return list(parts)
 
@@ -223,9 +219,10 @@ def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
     return True
 
 def detect_intent_qna(q_norm: str) -> str:
-    # obrazec za zaporo ceste – prioriteta pred prometom
-    if ("zapora" in q_norm or "zaprtje" in q_norm) and ("vloga" in q_norm or "obrazec" in q_norm):
+    # 1) Vloga za zaporo (morfološko robustno)
+    if re.search(r'\bzapor\w*', q_norm) and re.search(r'\bvlog\w*|\bobrazec\b', q_norm):
         return "zapora_vloga"
+    # 2) Ostalo
     if re.search(r'\bkdo je\b', q_norm) and ('zupan' in q_norm or 'župan' in q_norm):
         return 'who_is_mayor'
     if 'kontakt' in q_norm or 'telefon' in q_norm or 'e mail' in q_norm or 'stevilka' in q_norm or 'številka' in q_norm:
@@ -238,27 +235,25 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
-    if ('županov' in q_norm or 'zupanov' in q_norm or 'zlata petica' in q_norm or 'petica' in q_norm or 'nagrade' in q_norm) and re.search(r'\b20\d{2}\b', q_norm):
+    if ('županov' in q_norm or 'zupanov' in q_norm or 'zlata petica' in q_norm or 'petica' in q_norm or 'nagrade' in q_norm) and re.search(r'\b(19|20)\d{2}\b', q_norm):
         return 'awards'
     if 'pgd' in q_norm or 'gasil' in q_norm:
         return 'pgd'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben', 'pgd', 'gasil', 'zapora', 'nagrad']):
         return 'fram_info'
-    # promet (status)
     if any(k in q_norm for k in cfg.KLJUCNE_PROMET):
         return 'traffic'
-    # odpadki
     if any(k in q_norm for k in cfg.KLJUCNE_ODPADKI) or get_canonical_waste(q_norm) or ('naslednji' in q_norm):
         return 'waste'
     return 'general'
 
 def map_award_alias(q_norm: str) -> str:
-    # user: "županova petica" -> v zapisu imamo "Zlata petica"
     if "petic" in q_norm:
         return "zlata_petica"
     if "zupanov" in q_norm or "županov" in q_norm:
-        # v naši bazi je pogosto "Priznanje župana"
         return "priznanje_zupana"
+    if "nagrad" in q_norm or "priznanj" in q_norm:
+        return "all"
     return "any"
 
 # ------------------------------------------------------------------------------
@@ -267,7 +262,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v50.3 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v50.4 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -365,7 +360,6 @@ Samostojno vprašanje:"""
             return None
 
     def _iter_geo_coords(self, geometry: dict):
-        """Yield (lat, lon) iz različnih GeoJSON geometrij."""
         if not geometry:
             return
         gtype = geometry.get("type")
@@ -373,47 +367,34 @@ Samostojno vprašanje:"""
         if not coords:
             return
 
-        def yx(p):  # GeoJSON je [lon, lat]
-            return (p[1], p[0])
+        def yx(p):
+            return (p[1], p[0])  # lat, lon
 
         if gtype == "Point":
             yield yx(coords)
         elif gtype == "MultiPoint":
-            for p in coords:
-                yield yx(p)
+            for p in coords: yield yx(p)
         elif gtype == "LineString":
-            for p in coords:
-                yield yx(p)
+            for p in coords: yield yx(p)
         elif gtype == "MultiLineString":
             for line in coords:
-                for p in line:
-                    yield yx(p)
+                for p in line: yield yx(p)
         elif gtype == "Polygon":
             for ring in coords:
-                for p in ring:
-                    yield yx(p)
+                for p in ring: yield yx(p)
         elif gtype == "MultiPolygon":
             for poly in coords:
                 for ring in poly:
-                    for p in ring:
-                        yield yx(p)
+                    for p in ring: yield yx(p)
 
     def _geometry_near_municipality(self, geometry: dict) -> bool:
-        """True, če katerakoli točka geometrije pade v bbox ali v radij do središča občine."""
         lat_min, lat_max = cfg.GEO_LAT_MIN, cfg.GEO_LAT_MAX
         lon_min, lon_max = cfg.GEO_LON_MIN, cfg.GEO_LON_MAX
-
-        # najprej hiter bbox test
-        in_bbox = False
         pts = list(self._iter_geo_coords(geometry))
         for (lat, lon) in pts:
             if lat_min <= lat <= lat_max and lon_min <= lon <= lon_max:
-                in_bbox = True
-                break
-        if in_bbox:
-            return True
+                return True
 
-        # fallback: razdalja do središča (haversine)
         from math import radians, sin, cos, asin, sqrt
         R = 6371.0
         clat, clon = radians(cfg.GEO_CENTER_LAT), radians(cfg.GEO_CENTER_LON)
@@ -454,12 +435,10 @@ Samostojno vprašanje:"""
             props = d.get("properties", {}) or {}
             geom  = d.get("geometry", {}) or {}
             cel = " ".join(str(props.get(polje, "")).lower() for polje in ("cesta", "opis", "imeDogodka"))
-
             geo_ok = self._geometry_near_municipality(geom)
             has_anchor = any(k in cel for k in cfg.PROMET_FILTER)
             has_ban    = any(b in cel for b in cfg.PROMET_BAN)
-
-            if geo_ok or (has_anchor and not has_ban):
+            if (geo_ok or has_anchor) and not has_ban:
                 relevantne.append(props)
 
         if not relevantne:
@@ -641,6 +620,18 @@ Samostojno vprašanje:"""
         return ans
 
     # ---- Nagrade: indeks in odgovori
+    def _clean_bullet(self, line: str) -> str:
+        ln = line.strip()
+        ln = re.sub(r'^\s*[-–—\*•]+\s*', '', ln)
+        ln = re.sub(r'^\s*\*\*\s*', '', ln)
+        ln = re.sub(r'\*\*', '', ln)
+        return ln.strip()
+
+    def _split_names(self, chunk: str) -> List[str]:
+        raw = [p.strip(" .;") for p in re.split(r',\s*', chunk) if p.strip()]
+        # odstrani prazne ali ostanke oznak
+        return [re.sub(r'^\*+', '', r).strip() for r in raw if r and len(r) > 1]
+
     def _build_awards_index(self) -> None:
         logger.info("Gradim indeks nagrad …")
         if not self.collection:
@@ -656,80 +647,134 @@ Samostojno vprašanje:"""
             y = self._awards_by_year.setdefault(year, {})
             y.setdefault(key, [])
             for it in items:
-                if it not in y[key]:
+                if it and it not in y[key]:
                     y[key].append(it)
 
         for i in range(len(got["ids"])):
             doc = got["documents"][i]
-            meta = got["metadatas"][i]
             text = doc
-            # leto iz meta ali iz besedila
-            years = [int(y) for y in re.findall(r'\b(20\d{2}|1999|2000|2001|2002|2003|2004|2005|2006|2007|2008|2009)\b', text)]
+
+            # leto
+            years = [int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', text)]
             year = max(years) if years else None
             if not year:
                 continue
 
-            # razreži po sekcijah
-            # lovimo nazive sekcij: Zlata petica / Prejemniki Zlate petice, Priznanje župana, Spominska plaketa
-            sec_map = {
-                "zlata_petica": r"(?:prejemniki\s+zlate\s+petice|zlata\s+petica)\s*:?\s*(.*?)(?:\n\n|\Z)",
-                "priznanje_zupana": r"(?:priznanje\s+župana|priznanje\s+zupana)\s*:?\s*(.*?)(?:\n\n|\Z)",
-                "spominska_plaketa": r"(?:spominska\s+plaketa)\s*:?\s*(.*?)(?:\n\n|\Z)",
-            }
-            for key, rx in sec_map.items():
-                m = re.search(rx, text, flags=re.IGNORECASE | re.DOTALL)
-                if m:
-                    block = m.group(1).strip()
-                    # pobere imena, ločena z vejicami ali po alinejah
-                    names = []
-                    # poizkusi pobrati alineje
-                    for ln in block.splitlines():
-                        ln = ln.strip(" -*•\t")
-                        if not ln:
-                            continue
-                        # odstrani oznake OŠ
-                        ln = re.sub(r"^\*?\s*(o[sš]\s*ra[cč]e|o[sš]\s*fram)\s*:\s*", "", ln, flags=re.IGNORECASE)
-                        # razcepi po vejicah
-                        parts = [p.strip(" .;") for p in re.split(r",\s*", ln) if p.strip()]
-                        names.extend(parts)
-                    # fallback: vse v eni vrstici
-                    if not names:
-                        names = [p.strip(" .;") for p in re.split(r",\s*", block) if p.strip()]
-                    add(year, key, names)
+            # Zlata petica (z razcepom na OŠ Rače / OŠ Fram, če obstaja)
+            m_zp = re.search(r"(prejemniki\s+zlate\s+petice|zlata\s+petica)\s*:?\s*(.*?)(?:\n\s*\n|\Z)", text, flags=re.IGNORECASE | re.DOTALL)
+            if m_zp:
+                block = m_zp.group(2).strip()
+                os_race, os_fram, generic = [], [], []
+                for ln in block.splitlines():
+                    ln0 = self._clean_bullet(ln)
+                    if not ln0:
+                        continue
+                    # vrstica z "OŠ Rače: imena" ali "OŠ Fram: imena"
+                    m_head = re.match(r'^(o[sš]\s*ra[cč]e|o[sš]\s*fram)\s*:\s*(.*)$', ln0, flags=re.IGNORECASE)
+                    if m_head:
+                        school, names_str = m_head.group(1).lower(), m_head.group(2)
+                        names = self._split_names(names_str)
+                        if 'ra' in school:  # "oš rače"
+                            os_race.extend(names)
+                        else:
+                            os_fram.extend(names)
+                    else:
+                        # če ni glave, poskusi preprosto pobrati imena (fallback)
+                        generic.extend(self._split_names(ln0))
+                if os_race: add(year, "zlata_petica_os_race", os_race)
+                if os_fram: add(year, "zlata_petica_os_fram", os_fram)
+                if generic and not (os_race or os_fram):
+                    add(year, "zlata_petica", generic)
+
+            # Priznanje župana
+            m_pz = re.search(r"(priznanje\s+župana|priznanje\s+zupana)\s*:?\s*(.*?)(?:\n\s*\n|\Z)", text, flags=re.IGNORECASE | re.DOTALL)
+            if m_pz:
+                block = m_pz.group(2).strip()
+                names = []
+                for ln in block.splitlines():
+                    ln0 = self._clean_bullet(ln)
+                    if not ln0: continue
+                    names.extend(self._split_names(ln0))
+                add(year, "priznanje_zupana", names)
+
+            # Spominska plaketa
+            m_sp = re.search(r"(spominska\s+plaketa)\s*:?\s*(.*?)(?:\n\s*\n|\Z)", text, flags=re.IGNORECASE | re.DOTALL)
+            if m_sp:
+                block = m_sp.group(2).strip()
+                names = []
+                for ln in block.splitlines():
+                    ln0 = self._clean_bullet(ln)
+                    if not ln0: continue
+                    names.extend(self._split_names(ln0))
+                add(year, "spominska_plaketa", names)
+
+            # Posthumno častni občan
+            m_pc = re.search(r"(posthumno\s+častni\s+občan|posthumno\s+castni\s+obcan).*?:\s*(.*?)(?:\n\s*\n|\Z)", text, flags=re.IGNORECASE | re.DOTALL)
+            if m_pc:
+                names = self._split_names(m_pc.group(2).strip())
+                add(year, "posthumno_castni_obcan", names)
 
         logger.info(f"Nagrade: zbrana leta: {sorted(self._awards_by_year.keys())}")
+
+    def _format_awards_all(self, year: int, data: Dict[str, List[str]]) -> str:
+        parts = []
+        if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram") or data.get("zlata_petica"):
+            if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram"):
+                if data.get("zlata_petica_os_race"):
+                    parts.append("**Zlata petica – OŠ Rače:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_race"]))
+                if data.get("zlata_petica_os_fram"):
+                    parts.append("**Zlata petica – OŠ Fram:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_fram"]))
+            else:
+                parts.append("**Zlata petica:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica"]))
+        if data.get("priznanje_zupana"):
+            parts.append("**Priznanje župana:**\n" + "\n".join(f"- {n}" for n in data["priznanje_zupana"]))
+        if data.get("spominska_plaketa"):
+            parts.append("**Spominska plaketa:**\n" + "\n".join(f"- {n}" for n in data["spominska_plaketa"]))
+        if data.get("posthumno_castni_obcan"):
+            parts.append("**Posthumno častni občan:**\n" + "\n".join(f"- {n}" for n in data["posthumno_castni_obcan"]))
+        return f"**Nagrade in priznanja {year}:**\n" + "\n\n".join(parts) if parts else "Žal nimam podatkov za to leto."
 
     def _answer_awards(self, q_norm: str) -> Optional[str]:
         years = [int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', q_norm)]
         year = years[0] if years else None
         if not year:
             return None
-        cat = map_award_alias(q_norm)  # "zlata_petica" ali "priznanje_zupana" ali "any"
         data = self._awards_by_year.get(year) or {}
         if not data:
             return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
-        if cat == "any":
-            # prednost zlata petica, nato priznanje župana
-            if data.get("zlata_petica"):
-                cat = "zlata_petica"
-            elif data.get("priznanje_zupana"):
-                cat = "priznanje_zupana"
-        winners = data.get(cat) or []
-        if not winners and cat == "zlata_petica":
-            # če je uporabnik rekel "županova petica" – mapiraj na zlata petica
-            winners = data.get("zlata_petica") or []
-        if not winners and cat == "priznanje_zupana":
-            winners = data.get("priznanje_zupana") or []
-        if not winners:
-            return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
-        title = "Zlata petica" if cat == "zlata_petica" else ("Priznanje župana" if cat == "priznanje_zupana" else "Nagrade")
-        lines = "\n".join(f"- {w}" for w in winners)
-        return f"**{title} {year}:**\n{lines}"
 
-    # ---- PGD: kontakti (iz baze, sicer fallback seznam)
+        cat = map_award_alias(q_norm)
+        if cat in ("all", "any"):  # “županove nagrade 2025” -> vse
+            return self._format_awards_all(year, data)
+
+        if cat == "zlata_petica":
+            os_r = data.get("zlata_petica_os_race", [])
+            os_f = data.get("zlata_petica_os_fram", [])
+            if os_r or os_f:
+                out = [f"**Zlata petica {year}:**"]
+                if os_r:
+                    out.append("**OŠ Rače:**\n" + "\n".join(f"- {n}" for n in os_r))
+                if os_f:
+                    out.append("**OŠ Fram:**\n" + "\n".join(f"- {n}" for n in os_f))
+                return "\n".join(out)
+            # fallback: ne-diferencirano
+            zp = data.get("zlata_petica", [])
+            if zp:
+                return f"**Zlata petica {year}:**\n" + "\n".join(f"- {n}" for n in zp)
+            return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
+
+        if cat == "priznanje_zupana":
+            pz = data.get("priznanje_zupana", [])
+            if pz:
+                return f"**Priznanje župana {year}:**\n" + "\n".join(f"- {n}" for n in pz)
+            return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
+
+        # Unknown category -> vse
+        return self._format_awards_all(year, data)
+
+    # ---- PGD: kontakti
     def _build_pgd_contacts(self) -> None:
         logger.info("Gradim seznam PGD …")
-        # try to collect from collection
         possible = []
         if self.collection:
             res = self.collection.query(query_texts=["pgd gasilsko društvo kontakti rače fram"], n_results=10, include=["documents","metadatas"])
@@ -738,11 +783,9 @@ Samostojno vprašanje:"""
             for d,m in zip(docs,metas):
                 if "pgd" in normalize_text(d) or "gasil" in normalize_text(d):
                     possible.append((d,m))
-        # parse known names
         names = ["PGD Rače","PGD Fram","PGD Podova","PGD Spodnja in Zgornja Gorica"]
         for n in names:
             self._pgd_contacts.setdefault(n.lower(), {"ime": n})
-        # try extract emails/phones if present
         for d,_ in possible:
             low = normalize_text(d)
             for key in list(self._pgd_contacts.keys()):
@@ -750,7 +793,7 @@ Samostojno vprašanje:"""
                     m_email = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', d)
                     if m_email:
                         self._pgd_contacts[key]["email"] = m_email.group(0)
-                    m_tel = re.search(r'(\+?\d[\d\s/-]{6,})', d)
+                    m_tel = re.search(r'(\+?\d[\d\s/.-]{6,})', d)
                     if m_tel:
                         self._pgd_contacts[key]["telefon"] = m_tel.group(1).strip()
 
@@ -802,7 +845,6 @@ Samostojno vprašanje:"""
         intent = detect_intent_qna(q_norm)
         q_tokens = tokens_from_text(q_norm)
 
-        # awards, pgd, zapora_vloga imajo lastno obravnavo – RAG samo za ostalo
         if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor"):
             return None
 
@@ -810,7 +852,6 @@ Samostojno vprašanje:"""
         docs = results.get('documents', [[]])[0]
         metas = results.get('metadatas', [[]])[0]
 
-        # izloči koledarje odpadkov
         filtered_docs, filtered_metas = [], []
         for d, m in zip(docs, metas):
             if (m.get('kategorija','') or '').lower() == 'odvoz odpadkov':
@@ -818,10 +859,8 @@ Samostojno vprašanje:"""
             filtered_docs.append(d); filtered_metas.append(m)
         docs, metas = filtered_docs, filtered_metas
 
-        # filter po letu
         docs, metas = self._filter_rag_results_by_year(docs, metas, intent)
 
-        # link sanity
         context_parts = []
         for doc, meta in zip(docs, metas):
             url = meta.get('source_url', '')
@@ -878,7 +917,7 @@ ODGOVOR:"""
         q_norm = normalize_text(uporabnikovo_vprasanje)
         intent = detect_intent_qna(q_norm)
 
-        # 0) enostavni shortcuta
+        # 0) hitri primeri
         if intent == 'who_is_mayor':
             odgovor = "Župan občine Rače-Fram je **Samo Rajšp**."
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
@@ -887,7 +926,7 @@ ODGOVOR:"""
             return odgovor
 
         if intent == 'zapora_vloga':
-            odgovor = (f"**Vloga za zaporo ceste**: obrazec in navodila najdeš tukaj → {cfg.ROAD_CLOSURE_FORM_URL}\n\n"
+            odgovor = (f"**Vloga za zaporo ceste**: obrazec in navodila → {cfg.ROAD_CLOSURE_FORM_URL}\n\n"
                        f"- Izpolni obrazec in ga oddaj na občino.\n- Priloži skico/načrt zapore in terminski plan.\n- Roki: oddaja vsaj nekaj dni pred predvideno zaporo.")
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             if len(zgodovina) > 4: zgodovina.pop(0)
@@ -903,18 +942,15 @@ ODGOVOR:"""
                 return ans
 
         if intent == 'pgd':
-            # če je vprašanje o seznamu društev
+            out = self._answer_pgd_list()
             if "povelj" in q_norm:
-                # ne izmišljamo imen; če jih najdemo v besedilih, se bodo znašli v kontaktih
-                out = self._answer_pgd_list() + "\n\n(Opomba: za poveljniške podatke mi povej točno za katero društvo.)"
-            else:
-                out = self._answer_pgd_list()
+                out += "\n\n(Opomba: za poveljniške podatke povej točno za katero društvo.)"
             zgodovina.append((uporabnikovo_vprasanje, out))
             if len(zgodovina) > 4: zgodovina.pop(0)
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, out)
             return out
 
-        # preoblikovanje (za kontekstualna nadaljevanja)
+        # preoblikovanje
         pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
         vprasanje_lower = normalize_text(pametno_vprasanje)
 
@@ -922,7 +958,6 @@ ODGOVOR:"""
         if intent == 'waste' or (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif intent == 'traffic':
-            # počisti stanje odpadkov, če ni več relevantno
             if stanje.get('namen') == 'odpadki' and not (stanje.get('caka_na') in ('lokacija','tip')):
                 stanje.pop('namen', None); stanje.pop('caka_na', None)
             odgovor = self.preveri_zapore_cest()
@@ -931,7 +966,6 @@ ODGOVOR:"""
                 stanje.pop('namen', None); stanje.pop('caka_na', None)
             prompt = self._zgradi_rag_prompt(pametno_vprasanje, zgodovina)
             if not prompt:
-                # posebni primeri: gradbeno, komunalni prispevek, fram info
                 if intent == 'gradbeno':
                     odgovor = ("**Gradbeno dovoljenje – postopek (povzetek):**\n"
                                "- **1) Lokacijska informacija** (merila in pogoji).\n"
@@ -944,10 +978,9 @@ ODGOVOR:"""
                                "- **Kaj**: plačilo dela stroškov komunalne opreme.\n"
                                "- **Kdo**: investitor/lastnik pri novogradnji ali spremembi namembnosti.\n"
                                "- **Kdaj**: pred izdajo gradbenega dovoljenja.\n"
-                               "- **Kam**: vlogo oddaš na občino (možen je **informativni izračun**).\n"
+                               "- **Kam**: vlogo oddaš na občino (možen **informativni izračun**).\n"
                                "- **Priloge**: podatki o objektu, projektna dokumentacija.\n"
-                               "- **Kontakt**: občina (skupna številka) — " + cfg.FALLBACK_CONTACT + ".\n"
-                               "- **Več**: glej rubriko *Komunalni prispevek* na občinski strani.")
+                               "- **Kontakt**: " + cfg.FALLBACK_CONTACT + ".")
                 else:
                     odgovor = "Žal o tej temi nimam dovolj podatkov."
             else:
