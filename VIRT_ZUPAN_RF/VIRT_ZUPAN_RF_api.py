@@ -117,7 +117,7 @@ def gen_street_keys(name: str) -> List[str]:
     return [k for k in keys if k]
 
 def parse_dates_from_text(text: str) -> List[str]:
-    dates = re.findall(r'(\d{1,2}\.\d{1,2}\.?)', text)
+    dates = re.findall(r'(\d{1,2}\.\d{1,2}\.?)', text or "")
     seen = set(); out = []
     for d in dates:
         dn = d if d.endswith('.') else d + '.'
@@ -127,7 +127,6 @@ def parse_dates_from_text(text: str) -> List[str]:
 
 def get_canonical_waste(text: str) -> Optional[str]:
     norm = normalize_text(text)
-    # specifično pred generičnim
     if "stekl" in norm: return "Steklena embalaža"
     if "papir" in norm or "karton" in norm: return "Papir in karton"
     if "bio" in norm or "biolo" in norm: return "Biološki odpadki"
@@ -159,7 +158,7 @@ def extract_locations_from_naselja(field: str) -> List[str]:
     return list(parts)
 
 def tokens_from_text(s: str) -> set:
-    return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s)) if len(t) > 2}
+    return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s or "")) if len(t) > 2}
 
 # URL pravila po intentih
 INTENT_URL_RULES: Dict[str, Dict[str, set]] = {
@@ -177,15 +176,12 @@ def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
         return False
     path_tokens = tokens_from_text(u.path)
     rules = INTENT_URL_RULES.get(intent, {"must": set(), "ban": set()})
-    # ban
     if rules["ban"] & path_tokens:
         return False
-    # must – v URL ali vsaj v dokumentu
     if rules["must"] and not (rules["must"] & path_tokens):
         doc_tokens = tokens_from_text(doc)
         if not (rules["must"] & doc_tokens):
             return False
-    # vsaj nekaj prekrivanja z vprašanjem
     if not (q_tokens & path_tokens):
         doc_tokens = tokens_from_text(doc)
         if len(q_tokens & doc_tokens) < 2:
@@ -205,6 +201,9 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
+    # GASILCI – ujemi vsa vprašanja, ki omenjajo gasilce/PGD
+    if 'gasil' in q_norm or 'pgd' in q_norm:
+        return 'gasilci'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben']):
         return 'fram_info'
     return 'general'
@@ -215,7 +214,7 @@ def detect_intent_qna(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v48.1 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v48.2 (gasilci+) inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -344,7 +343,7 @@ Samostojno vprašanje:"""
             porocilo += f"- **Cesta:** {z.get('cesta', 'Ni podatka')}\n  **Opis:** {z.get('opis', 'Ni podatka')}\n\n"
         return porocilo.strip()
 
-    # ---- Odpadki: indeks
+    # ---- Odpadki: indeks (PUŠČENO NEDOTAKNJENO)
     def _build_waste_indexes(self) -> None:
         logger.info("Gradim indekse za odpadke …")
         if not self.collection:
@@ -375,7 +374,7 @@ Samostojno vprašanje:"""
         self._street_keys_list = list(self._street_index.keys())
         logger.info(f"Indeks: {len(self._street_keys_list)} uličnih ključev, {len(self._area_type_docs)} (območje,tip).")
 
-    # ---- Odpadki: iskanje
+    # ---- Odpadki: iskanje (PUŠČENO NEDOTAKNJENO)
     def _best_street_key_for_query(self, phrases: List[str]) -> Optional[str]:
         for ph in phrases:
             for key in gen_street_keys(ph):
@@ -513,6 +512,88 @@ Samostojno vprašanje:"""
         stanje.pop('caka_na', None)
         return ans
 
+    # ---- GASILCI: VSA društva + osnovni kontakti
+    def obravnavaj_gasilci(self) -> str:
+        if not self.collection:
+            return "Podatkov trenutno nimam."
+
+        # Poskusimo najti vse dokumente, kjer se omenjajo PGD/gasilci
+        query = "PGD gasilsko društvo Rače Fram Podova Gorica kontakt telefon email naslov"
+        res = self.collection.query(query_texts=[query], n_results=25, include=["documents", "metadatas"])
+        docs = res.get('documents', [[]])[0] if res else []
+        metas = res.get('metadatas', [[]])[0] if res else []
+
+        # Parser
+        name_pat = re.compile(r'\b(?:pgd|prostovoljno\s+gasilsko\s+druš[tv]o)\s+([a-z0-9\s\-čšžćđ]+)', re.IGNORECASE)
+        contact_pat = re.compile(r'(?:kontaktna\s*oseba|predsednik|poveljnik)\s*:\s*(.+)', re.IGNORECASE)
+        phone_pat = re.compile(r'(?:\+?\s*386|0)\s*\d(?:[\s/\-]?\d){5,}', re.IGNORECASE)
+        email_pat = re.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+        addr_pat = re.compile(r'(?:naslov|sede[žz])\s*:\s*(.+)', re.IGNORECASE)
+
+        def canon_name(raw: str) -> str:
+            raw = raw.strip()
+            raw = re.sub(r'\s+', ' ', raw)
+            # odreži na konec vrstice/vejice, da ne povleče preveč
+            raw = re.split(r'[,\n]|  ', raw)[0]
+            disp = raw.title()
+            if not disp.lower().startswith("pgd "):
+                disp = "PGD " + disp
+            return disp
+
+        entries: Dict[str, Dict[str, Any]] = {}
+
+        # Poberi iz dokumentov
+        for d in docs:
+            if not d:
+                continue
+            current = None
+            for line in d.splitlines():
+                ln = line.strip()
+                if not ln:
+                    continue
+                mname = name_pat.search(ln)
+                if mname:
+                    nm = canon_name(mname.group(1))
+                    current = entries.setdefault(nm, {"name": nm, "contact": set(), "phone": set(), "email": set(), "address": set()})
+                if current:
+                    for m in contact_pat.findall(ln):
+                        current["contact"].add(m.strip())
+                    for m in phone_pat.findall(ln):
+                        current["phone"].add(re.sub(r'\s+', ' ', m.strip()))
+                    for m in email_pat.findall(ln):
+                        current["email"].add(m.strip())
+                    for m in addr_pat.findall(ln):
+                        current["address"].add(m.strip())
+
+        # Fallback – zagotovi vsa ključna društva v občini
+        must_have = ["PGD Rače", "PGD Fram", "PGD Podova", "PGD Spodnja In Zgornja Gorica"]
+        for nm in must_have:
+            entries.setdefault(nm, {"name": nm, "contact": set(), "phone": set(), "email": set(), "address": set()})
+
+        # Formatiraj odgovor (ne ultra-kratek)
+        if not entries:
+            return "Žal v bazi nisem našel seznama gasilskih društev."
+
+        out_lines = ["**Gasilska društva v občini Rače-Fram** (z osnovnimi kontakti):"]
+        for nm in sorted(entries.keys()):
+            e = entries[nm]
+            contact = (", ".join(sorted(e["contact"])) if e["contact"] else "")
+            phone = (", ".join(sorted(e["phone"])) if e["phone"] else "")
+            email = (", ".join(sorted(e["email"])) if e["email"] else "")
+            addr = (", ".join(sorted(e["address"])) if e["address"] else "")
+            line = f"- **{e['name']}**"
+            details = []
+            if contact: details.append(f"kontakt: {contact}")
+            if phone:   details.append(f"telefon: {phone}")
+            if email:   details.append(f"e-pošta: {email}")
+            if addr:    details.append(f"naslov: {addr}")
+            if details:
+                line += " — " + "; ".join(details)
+            out_lines.append(line)
+
+        out_lines.append("\nČe želiš, lahko za posamezno društvo poiščem še **poveljniške podatke** ali povezavo na njihovo stran.")
+        return "\n".join(out_lines)
+
     # ---- RAG
     def _strip_past_year_lines(self, text: str, this_year: int) -> str:
         lines = text.splitlines()
@@ -553,7 +634,7 @@ Samostojno vprašanje:"""
         docs = results['documents'][0] if results and results.get('documents') else []
         metas = results['metadatas'][0] if results and results.get('metadatas') else []
 
-        # 1) izloči koledarje odpadkov iz RAG, če ni vprašanje o odpadkih
+        # izloči koledarje odpadkov iz RAG, če ni vprašanje o odpadkih
         filtered_docs, filtered_metas = [], []
         for d, m in zip(docs, metas):
             if (m.get('kategorija','') or '').lower() == 'odvoz odpadkov':
@@ -561,10 +642,10 @@ Samostojno vprašanje:"""
             filtered_docs.append(d); filtered_metas.append(m)
         docs, metas = filtered_docs, filtered_metas
 
-        # 2) filter po letu
+        # filter po letu
         docs, metas = self._filter_rag_results_by_year(docs, metas, intent)
 
-        # 3) filtriranje/link sanity: vključi POVEZAVO le, če je relevantna glede na intent in vprašanje
+        # filtriranje/link sanity
         context_parts = []
         for doc, meta in zip(docs, metas):
             url = meta.get('source_url', '')
@@ -580,7 +661,7 @@ Samostojno vprašanje:"""
 
         extra = []
         if intent == 'who_is_mayor':
-            extra.append("Če vprašanje sprašuje 'kdo je župan', odgovori v ENEM kratkem stavku samo z imenom in funkcijo, brez dodatkov.")
+            extra.append("Če vprašanje sprašuje 'kdo je župan', odgovori v enem stavku samo z imenom in funkcijo.")
         if intent == 'contact':
             extra.append(f"Če uporabnik prosi za 'kontakt' in v kontekstu ni specifičnega, uporabi generični kontakt: '{cfg.FALLBACK_CONTACT}'.")
         if intent == 'transport':
@@ -588,17 +669,17 @@ Samostojno vprašanje:"""
         if intent == 'komunalni_prispevek':
             extra.append("Za komunalni prispevek odgovori v 5–7 alinejah: (1) Kaj je, (2) Kdo je zavezanec, (3) Kdaj se plača, (4) Kam oddam vlogo, (5) Priloge/izračun, (6) Kontakt, (7) Povezava.")
         if intent == 'gradbeno':
-            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost), ter vključi LE relevantno povezavo; če ni, povej, da ni v kontekstu.")
+            extra.append("Za gradbeno dovoljenje navedi postopek (lokacijska info, PGD, oddaja pri UE, roki/veljavnost) in vključi le relevantne povezave, če so v kontekstu.")
         if intent == 'camp':
             extra.append("Za poletni kamp navedi samo aktualno leto: datume, lokacijo, ceno (če je), in kontakt/URL – brez omembe preteklih let.")
         if intent == 'fram_info':
-            extra.append("Za splošne informacije o Framu navedi kratek opis (lokacija, zgodovina, znamenitosti) in vključi povezavo samo če je neposredno o kraju Fram (ne gasilska društva).")
+            extra.append("Za splošne informacije o Framu navedi kratek opis (lokacija, zgodovina, znamenitosti) in vključi povezavo samo če je neposredno o kraju Fram.")
 
         directives = "\n".join(extra)
 
         return f"""Ti si 'Virtualni župan občine Rače-Fram'.
 DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj informacij iz preteklih let.
-DIREKTIVA #2 (OBLIKA): Odgovor naj bo kratek in pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
+DIREKTIVA #2 (OBLIKA): Odgovor naj bo pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
 DIREKTIVA #3 (POVEZAVE): Če v kontekstu POVEZAVA ni URL, **ne izmišljuj** povezave in je ne dodajaj.
 DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' – brez balasta.
 {directives}
@@ -645,8 +726,12 @@ ODGOVOR:"""
         is_traffic_query = any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in cfg.KLJUCNE_PROMET)
         waste_followup_needed = (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip'))
 
+        intent = detect_intent_qna(vprasanje_lower)
+
         if is_waste_query or waste_followup_needed:
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
+        elif intent == 'gasilci':
+            odgovor = self.obravnavaj_gasilci()
         elif is_traffic_query:
             if stanje.get('namen') == 'odpadki' and not waste_followup_needed:
                 stanje.pop('namen', None); stanje.pop('caka_na', None)
