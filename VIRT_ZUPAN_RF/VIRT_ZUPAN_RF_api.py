@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.4)
+# VIRT_ZUPAN_RF_api.py  (v51.5)
 
 import os
 import sys
@@ -189,6 +189,30 @@ def get_canonical_waste(text: str) -> Optional[str]:
                 return canon
     return None
 
+def extract_locations_from_naselja(field: str) -> List[str]:
+    """
+    Iz meta polja 'naselja' izlušči posamezne ulice/naselja.
+    Podpira vzorce tipa 'Naselje: A, B, C' ter odstrani opombe '(h. št. ...)'.
+    """
+    parts = set()
+    if not field:
+        return []
+    clean = re.sub(r'\(h\. *št\..*?\)', '', field, flags=re.IGNORECASE)
+    # razbij po morebitnih sekcijskih naslovih 'Fram:' ipd.
+    segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', clean)
+    if len(segments) <= 1:
+        segments = [clean]
+    for seg in segments:
+        seg = seg.strip()
+        if not seg or seg.endswith(':'):
+            continue
+        for sub in seg.split(','):
+            n = normalize_text(sub)
+            if n:
+                n = n.replace("bistriška", "bistriska")
+                parts.add(n)
+    return list(parts)
+
 def tokens_from_text(s: str) -> set:
     return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s)) if len(t) > 2}
 
@@ -233,7 +257,7 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
     if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bzupan\b', q_norm):
         return 'who_is_mayor'
 
-    # Transport – če vsebuje transportne namige ALI je prejšnji intent 'transport' in vprašanje je “kratko nadaljevanje”
+    # Transport
     has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS) or any(p in q_norm for p in cfg.TRANSPORT_PLACES)
     short_followup = bool(re.search(r'^\s*(kaj pa|pa)\b', q_norm)) or bool(re.search(r'\b(v|na|do)\s+\w+', q_norm))
     if has_transport_hint or (last_intent == 'transport' and short_followup):
@@ -277,7 +301,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.4 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v51.5 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -362,7 +386,6 @@ class VirtualniZupan:
             "o s fram":"os fram",
             "o s race":"os race",
             "brunsvik":"brunšvik",
-            "brunsvik":"brunšvik",
         }
         for k,v in repl.items():
             t = t.replace(k, v)
@@ -382,39 +405,30 @@ class VirtualniZupan:
         if re.search(r'\bpopoldne\b', q_norm): time_hint = "popoldne"
 
         # odkrij kraje
-        def has_place(p): return p in q_norm
-
-        places = [p for p in cfg.TRANSPORT_PLACES if has_place(p)]
-        # smernice prepoznavanja
         m1 = re.search(r'\bod\s+(o?s?\s*fram|o?s?\s*race|kopivnik|morje|slivnica|brun[sš]vik)\b.*\b(v|na|do)\s+(o?s?\s*fram|o?s?\s*race|kopivnik|morje|slivnica|brun[sš]vik)\b', q_norm)
         if m1:
             origin = self._norm_place(m1.group(1))
             dest   = self._norm_place(m1.group(3))
         else:
-            # “od OŠ Fram do Kopivnika”
             m2 = re.search(r'\bod\s+(o?s?\s*fram|o?s?\s*race)\b.*\b(do|v|na)\s+(kopivnik|morje|slivnica|brun[sš]vik|fram|race)\b', q_norm)
             if m2:
                 origin = self._norm_place(m2.group(1))
                 dest   = self._norm_place(m2.group(3))
             else:
-                # “kaj pa v morje” => prevzemi prejšnji origin
                 m3 = re.search(r'\b(kaj pa|pa)?\s*(do|v|na)\s+(kopivnik|morje|slivnica|brun[sš]vik|fram|race|o?s?\s*fram|o?s?\s*race)\b', q_norm)
                 if m3:
                     dest = self._norm_place(m3.group(3))
                     origin = stanje.get('transport_last_origin')
-                # “pa iz kopivnika” => prevzemi prejšnji dest kot origin, ali najdi dest iz stanja
                 m4 = re.search(r'\b(kaj pa|pa)?\s*(iz|od)\s+(kopivnik|morje|slivnica|brun[sš]vik|fram|race|o?s?\s*fram|o?s?\s*race)\b', q_norm)
                 if m4:
                     origin = self._norm_place(m4.group(3))
                     dest = stanje.get('transport_last_dest')
 
-        # če manjka origin/dest, poskusi iz stanja
         if not origin:
             origin = stanje.get('transport_last_origin')
         if not dest:
             dest = stanje.get('transport_last_dest')
 
-        # normalizacije
         def norm_school(x: Optional[str]) -> Optional[str]:
             if not x: return None
             if "os fram" in x or ("fram" in x and "os" in x): return "OŠ Fram"
@@ -428,7 +442,6 @@ class VirtualniZupan:
     def _answer_transport(self, q_raw: str, q_norm: str, stanje: Dict[str, Any]) -> str:
         origin, dest, time_hint = self._extract_route(q_norm, stanje)
 
-        # če nimamo relacije, prijazno vprašanje
         if not origin and not dest:
             stanje['namen'] = 'transport'
             stanje['transport_waiting'] = 'route'
@@ -444,15 +457,14 @@ class VirtualniZupan:
             stanje['transport_waiting'] = 'origin'
             return "Iz kje pa? (npr. 'iz OŠ Fram', 'iz OŠ Rače')"
 
-        # relacija je znana -> zapomni si
         stanje['transport_last_origin'] = normalize_text(origin)
         stanje['transport_last_dest']   = normalize_text(dest)
         stanje['namen'] = 'transport'
         stanje.pop('transport_waiting', None)
 
-        # 1) trdi fallback za OŠ Fram ↔ Kopivnik
         def is_pair(a, b, A, B):
             return (normalize_text(a) == normalize_text(A) and normalize_text(b) == normalize_text(B))
+
         if (is_pair(origin, dest, "OŠ Fram", "Kopivnik") or is_pair(origin, dest, "Kopivnik", "OŠ Fram")):
             out_lines = ["**Prevoz {0} → {1}:**".format(origin, dest)]
             if not time_hint or time_hint == "zjutraj":
@@ -462,22 +474,24 @@ class VirtualniZupan:
             out_lines.append(f"**{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
             return "\n".join(out_lines)
 
-        # 2) poskusi RAG iz baze
         if self.collection:
-            q_texts = []
-            q_texts.append(f"prevoz {origin} {dest} vozni red odhod prihod")
-            q_texts.append(f"prevozi {origin} {dest} minibusi avtobus")
+            q_texts = [
+                f"prevoz {origin} {dest} vozni red odhod prihod",
+                f"prevozi {origin} {dest} minibusi avtobus"
+            ]
             res = self.collection.query(query_texts=q_texts, n_results=5, include=["documents","metadatas"])
-            docs = (res.get("documents") or [[]])[0] + (res.get("documents") or [[]])[1] if len(res.get("documents",[]))>1 else (res.get("documents") or [[]])[0]
-            metas = (res.get("metadatas") or [[]])[0] + (res.get("metadatas") or [[]])[1] if len(res.get("metadatas",[]))>1 else (res.get("metadatas") or [[]])[0]
-            # filtriraj na transportne zadeve
+            docs = (res.get("documents") or [[]])[0]
+            if len(res.get("documents", [])) > 1:
+                docs += (res.get("documents") or [[]])[1]
+            metas = (res.get("metadatas") or [[]])[0]
+            if len(res.get("metadatas", [])) > 1:
+                metas += (res.get("metadatas") or [[]])[1]
             pairs = []
             for d, m in zip(docs, metas):
                 low = normalize_text(d + " " + json.dumps(m, ensure_ascii=False))
                 if any(k in low for k in ("prevoz","vozni red","prevozi","minibus","avtobus")):
                     pairs.append((d, m))
             if pairs:
-                # zelo preprost izluščevalnik ur: hh.mm ali h.mm
                 times = re.findall(r'\b(\d{1,2}[:\.]\d{2})\b', " \n ".join(p[0] for p in pairs))
                 times = [t.replace(':','.') for t in times]
                 uniq = []
@@ -485,7 +499,6 @@ class VirtualniZupan:
                     if t not in uniq:
                         uniq.append(t)
                 if uniq:
-                    # če je time_hint, filtriraj
                     morn = [t for t in uniq if int(t.split('.')[0]) < 12]
                     aft  = [t for t in uniq if int(t.split('.')[0]) >= 12]
                     out_lines = [f"**Prevoz {origin} → {dest}:**"]
@@ -499,7 +512,6 @@ class VirtualniZupan:
                     out_lines.append(f"**{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
                     return "\n".join(out_lines)
 
-        # 3) če nič – prijazen fallback
         return (f"Za relacijo **{origin} → {dest}** nimam točnih ur. "
                 f"Preveri pri organizatorju. **{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
 
@@ -615,10 +627,7 @@ class VirtualniZupan:
             porocilo += f"- **Cesta:** {cesta}\n  **Opis:** {opis}\n\n"
         return porocilo.strip()
 
-    # ---------------------- ODPADKI, NAGRADE, PGD (kot v v51.3) ----------------------
-    # (Spodnji sklopi ostanejo nespremenjeni razen manjših izboljšav.)
-
-    # ---- Odpadki: indeks
+    # ---------------------- ODPADKI ----------------------
     def _build_waste_indexes(self) -> None:
         logger.info("Gradim indekse za odpadke …")
         if not self.collection:
@@ -767,7 +776,7 @@ class VirtualniZupan:
         stanje['namen'] = 'odpadki'; stanje.pop('caka_na', None)
         return ans
 
-    # ---- Nagrade (parser loči OŠ Rače / OŠ Fram) + PGD – identično v51.3 ----
+    # ---------------------- NAGRADE + PGD ----------------------
     def _clean_bullet(self, line: str) -> str:
         ln = line.strip()
         ln = re.sub(r'^\s*[-–—\*•]+\s*', '', ln)
@@ -793,6 +802,7 @@ class VirtualniZupan:
         race_items, fram_items = [], []
         for m in inline_matches_race: race_items.extend(self._split_names(m))
         for m in inline_matches_fram: fram_items.extend(self._split_names(m))
+
         def collect_following_lines(school_regex: str) -> List[str]:
             items: List[str] = []
             pattern = re.compile(rf'^(?P<head>\s*o[sš]\s*{school_regex}\s*:?\s*)(?P<rest>.*)$', flags=re.IGNORECASE | re.MULTILINE)
@@ -809,8 +819,10 @@ class VirtualniZupan:
                     else: items.extend(self._split_names(ln))
                 break
             return items
+
         if not race_items: race_items = collect_following_lines(r'ra[cč]e')
         if not fram_items: fram_items = collect_following_lines(r'fram')
+
         if race_items: self._add_award(year, "zlata_petica_os_race", race_items)
         if fram_items: self._add_award(year, "zlata_petica_os_fram", fram_items)
         if not race_items and not fram_items:
@@ -897,7 +909,7 @@ class VirtualniZupan:
             return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
         return self._format_awards_all(year, data)
 
-    # ---- PGD
+    # ---------------------- PGD ----------------------
     def _build_pgd_contacts(self) -> None:
         logger.info("Gradim seznam PGD …")
         possible = []
@@ -977,7 +989,6 @@ class VirtualniZupan:
         logger.info(f"Gradim RAG prompt za vprašanje: '{vprasanje}'")
         if not self.collection: return None
         q_norm = normalize_text(vprasanje)
-        last_intent = self.zgodovina_seje.get("dummy",{}).get("last_intent")  # not used; kept for signature parity
         intent = detect_intent_qna(q_norm)
         q_tokens = tokens_from_text(q_norm)
         if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor","transport"):
@@ -1022,10 +1033,9 @@ ODGOVOR:"""
 
     # ---------------------- GLAVNI VMESNIK ----------------------
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora: List[Tuple[str, str]], zadnje_vprasanje: str, stanje: Dict[str, Any]) -> str:
-        """Ohranjeno iz prejšnje verzije; za transport uporabljamo lastno logiko, zato tukaj ne silimo LLM."""
         if not zgodovina_pogovora:
             return zadnje_vprasanje
-        return zadnje_vprasanje
+        return zadnje_vprasanje  # transport rešujemo posebej
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
         self.nalozi_bazo()
