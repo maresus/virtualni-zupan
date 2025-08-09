@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.1)
+# VIRT_ZUPAN_RF_api.py  (v51.3)
 
 import os
 import sys
@@ -61,7 +61,7 @@ class Config:
 
     # Ključne besede
     KLJUCNE_ODPADKI: Tuple[str, ...] = ("smeti", "odpadki", "odvoz", "odpavkov", "komunala")
-    # odstranjeni 'ceste', 'cesti' (preveč lažnih ujemanj)
+    # manj lažnih ujemanj
     KLJUCNE_PROMET: Tuple[str, ...] = ("cesta", "promet", "dela", "delo", "zapora", "zapore", "zaprta", "zastoj", "gneča", "kolona")
 
     PROMET_FILTER: Tuple[str, ...] = (
@@ -185,27 +185,15 @@ def parse_dates_from_text(text: str) -> List[str]:
 
 def get_canonical_waste(text: str) -> Optional[str]:
     norm = normalize_text(text)
-
-    # tolerantno na tipkarske: "stekl", "stelk", "stekla" ...
-    if re.search(r'stekl|stelk', norm):
-        return "Steklena embalaža"
-    if "papir" in norm or "karton" in norm:
-        return "Papir in karton"
-    if "bio" in norm or "biolo" in norm:
-        return "Biološki odpadki"
-    # popravljen regex za "mešani"
-    if re.search(r'\bme[sš]an(i|i\s+komunalni|i\s+odpadki)?\b', norm):
-        return "Mešani komunalni odpadki"
-    if (("rumen" in norm and "kant" in norm) or "embala" in norm) and "stekl" not in norm and "stelk" not in norm:
-        return "Odpadna embalaža"
-
-    # direktne variante
+    if re.search(r'stekl|stelk', norm): return "Steklena embalaža"
+    if "papir" in norm or "karton" in norm: return "Papir in karton"
+    if "bio" in norm or "biolo" in norm: return "Biološki odpadki"
+    if re.search(r'\bme[sš]an(i|i\s+komunalni|i\s+odpadki)?\b', norm): return "Mešani komunalni odpadki"
+    if (("rumen" in norm and "kant" in norm) or "embala" in norm) and not re.search(r'stekl|stelk', norm): return "Odpadna embalaža"
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
             if normalize_text(v) in norm:
                 return canon
-
-    # mehki fuzzy – malo nižji prag
     for canon, variants in cfg.WASTE_VARIANTS.items():
         for v in variants:
             if _ratio(norm, normalize_text(v)) >= 0.84:
@@ -244,7 +232,6 @@ def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
         doc_tokens = tokens_from_text(doc)
         if not (rules["must"] & doc_tokens):
             return False
-    # manj strog prag: dovolj je 1 token v URL ALI v vsebini
     if not (q_tokens & path_tokens):
         doc_tokens = tokens_from_text(doc)
         if len(q_tokens & doc_tokens) < 1:
@@ -253,20 +240,24 @@ def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
 
 # --- INTENTI ---------------------------------------------------------------
 def detect_intent_qna(q_norm: str) -> str:
+    """Delamo na ASCII-normaliziranem nizu q_norm!"""
     # 1) Vloga za zaporo – PRVO
     if re.search(r'\bzapor\w*', q_norm) and re.search(r'\bvlog\w*|\bobrazec\w*', q_norm):
         return "zapora_vloga"
 
-    # 2) Nagrade/Petice – pred “kdo je župan”
-    if (re.search(r'\bzlat\w*\s+petic\w*', q_norm) or
-        re.search(r'\bpetic\w*', q_norm) or
-        re.search(r'\bžupanov\w*\s+nagrad\w*', q_norm) or
+    # 2) Nagrade/Petice – robustno na diakritiko in variante
+    # - 'zupanovih nagrad', 'zupanove nagrade', 'zupanova nagrada'
+    # - 'petica', 'petice', 'petic', 'peti' (tipkarske)
+    if (re.search(r'\b(zlat\w*\s+peti\w*|petic\w*|peti\b)', q_norm) or
+        re.search(r'\bzupanov\w*\s+nagrad\w*', q_norm) or
+        re.search(r'\bzupanov\w*\s+priznanj\w*', q_norm) or
+        re.search(r'\bzupanova?\s+nagrada', q_norm) or
         'nagrade' in q_norm or 'priznanj' in q_norm):
         if re.search(r'\b(19\d{2}|20\d{2})\b', q_norm):
             return 'awards'
 
     # 3) Župan (izogni se županov/županove/županovega …)
-    if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bžupan\b', q_norm):
+    if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bzupan\b', q_norm):
         return 'who_is_mayor'
 
     # 4) Odpadki naj imajo prednost pred prometom
@@ -274,7 +265,7 @@ def detect_intent_qna(q_norm: str) -> str:
         return 'waste'
 
     # Ostalo
-    if 'kontakt' in q_norm or 'telefon' in q_norm or 'e mail' in q_norm or 'stevilka' in q_norm or 'številka' in q_norm:
+    if 'kontakt' in q_norm or 'telefon' in q_norm or 'e mail' in q_norm or 'stevilka' in q_norm or 'stevilka' in q_norm:
         return 'contact'
     if 'prevoz' in q_norm or 'vozni red' in q_norm or 'minibus' in q_norm or 'avtobus' in q_norm or 'kopivnik' in q_norm:
         return 'transport'
@@ -293,9 +284,16 @@ def detect_intent_qna(q_norm: str) -> str:
     return 'general'
 
 def map_award_alias(q_norm: str) -> str:
-    if re.search(r'\bpetic\w*', q_norm): return "zlata_petica"
-    if "priznan" in q_norm and "župan" in q_norm: return "priznanje_zupana"
-    if "nagrad" in q_norm or "priznanj" in q_norm: return "all"
+    # vse ASCII – ujemi “peti”, “petic”, “petica”
+    if re.search(r'\bpeti\w*|zlat\w*\s+peti\w*', q_norm): 
+        return "zlata_petica"
+    # 'priznanje zupana' ali 'zupanova nagrada'
+    if (re.search(r'priznan\w*\s+zupan\w*', q_norm) or
+        re.search(r'zupanov\w*\s+nagrad\w*', q_norm) or
+        re.search(r'zupanova?\s+nagrada', q_norm)):
+        return "priznanje_zupana"
+    if "nagrad" in q_norm or "priznanj" in q_norm:
+        return "all"
     return "any"
 
 # ------------------------------------------------------------------------------
@@ -304,7 +302,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.1 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v51.3 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -316,7 +314,7 @@ class VirtualniZupan:
             total=3,
             backoff_factor=0.3,
             status_forcelist=[500, 502, 504],
-            allowed_methods=frozenset(["GET"])  # ne retryaj POST ipd.
+            allowed_methods=frozenset(["GET"])
         )
         self._http.mount("https://", HTTPAdapter(max_retries=retries))
 
@@ -333,7 +331,6 @@ class VirtualniZupan:
 
     # ---- infra
     def _call_llm(self, prompt: str, **kwargs) -> str:
-        """Osnovni klic LLM z retry. Vrne napako kot besedilo, ne meče exceptiona."""
         try:
             client = self.openai_client.with_options(timeout=cfg.OPENAI_TIMEOUT_S)
             res = client.chat.completions.create(
@@ -561,12 +558,10 @@ Samostojno vprašanje:"""
         logger.info(f"Indeks: {len(self._street_keys_list)} uličnih ključev, {len(self._area_type_docs)} (območje,tip).")
 
     def _best_street_key_for_query(self, phrases: List[str]) -> Optional[str]:
-        # direktno ujemanje
         for ph in phrases:
             for key in gen_street_keys(ph):
                 if key in self._street_index:
                     return key
-        # fuzzy fallback
         best = (None, 0.0)
         for ph in phrases:
             base = strip_generics(ph)
@@ -641,7 +636,6 @@ Samostojno vprašanje:"""
         if not wanted_tip and only_next and stanje.get('zadnji_tip'):
             wanted_tip = stanje['zadnji_tip']
 
-        # če je uporabnik pravkar odgovoril samo s tipom (npr. "steklo"), sprosti 'caka_na'
         if stanje.get('namen') == 'odpadki' and stanje.get('caka_na') == 'tip' and wanted_tip:
             stanje['caka_na'] = None
 
@@ -656,11 +650,9 @@ Samostojno vprašanje:"""
 
         key = self._best_street_key_for_query(phrases)
 
-        # FALLBACK: če ni ulice, poskusi z 'area' (fram, rače, ...)
         if not key:
             if not wanted_tip and stanje.get('zadnji_tip'):
                 wanted_tip = stanje['zadnji_tip']
-            # poišči area, ki se pojavi v vprašanju
             all_areas = {e["area"] for v in self._street_index.values() for e in v if e.get("area")}
             area_hit = None
             for a in all_areas:
@@ -732,7 +724,7 @@ Samostojno vprašanje:"""
         return ln.strip()
 
     def _split_names(self, chunk: str) -> List[str]:
-        raw = [p.strip(" .;") for p in re.split(r',\s*', chunk) if p.strip()]
+        raw = [p.strip(" .;") for p in re.split(r'[;,]\s*', chunk) if p.strip()]
         return [re.sub(r'^\*+', '', r).strip() for r in raw if r and len(r) > 1]
 
     def _add_award(self, year: int, key: str, items: List[str]):
@@ -745,48 +737,69 @@ Samostojno vprašanje:"""
                 y[key].append(it)
 
     def _parse_zlata_petica_block(self, year: int, block: str):
-        """Robusten parser:
-        - podpira 'OŠ Rače: A, B' ali 'OŠ Rače' v svoji vrstici + alineje spodaj
-        - podpira več sekcij v enem bloku in brez praznih vrstic med njimi
-        """
-        lines = [self._clean_bullet(ln) for ln in block.splitlines()]
-        lines = [ln for ln in lines if ln]
+        block = re.sub(r'\*\*(.*?)\*\*', r'\1', block)
 
-        def flush(bucket: Optional[str], tmp: List[str]):
-            if not bucket or not tmp:
-                return
-            if bucket == "race":
-                self._add_award(year, "zlata_petica_os_race", tmp)
-            elif bucket == "fram":
-                self._add_award(year, "zlata_petica_os_fram", tmp)
+        inline_matches_race = re.findall(
+            r'^\s*[-–•]?\s*o[sš]\s*ra[cč]e\s*:?\s*(.+)$',
+            block, flags=re.IGNORECASE | re.MULTILINE
+        )
+        inline_matches_fram = re.findall(
+            r'^\s*[-–•]?\s*o[sš]\s*fram\s*:?\s*(.+)$',
+            block, flags=re.IGNORECASE | re.MULTILINE
+        )
 
-        bucket: Optional[str] = None
-        tmp: List[str] = []
-        generic: List[str] = []
+        race_items, fram_items = [], []
+        for m in inline_matches_race:
+            race_items.extend(self._split_names(m))
+        for m in inline_matches_fram:
+            fram_items.extend(self._split_names(m))
 
-        for ln0 in lines:
-            m_head = re.match(r'^(o[sš]\s*ra[cč]e|o[sš]\s*fram)\s*:?\s*(.*)$', ln0, flags=re.IGNORECASE)
-            if m_head:
-                # nova sekcija – flush prejšnjo
-                flush(bucket, tmp)
-                tmp = []
-                school, rest = m_head.group(1).lower(), m_head.group(2).strip()
-                bucket = "race" if 'ra' in school else "fram"
+        def collect_following_lines(school_regex: str) -> List[str]:
+            items: List[str] = []
+            pattern = re.compile(
+                rf'^(?P<head>\s*o[sš]\s*{school_regex}\s*:?\s*)(?P<rest>.*)$',
+                flags=re.IGNORECASE | re.MULTILINE
+            )
+            for m in pattern.finditer(block):
+                head_end = m.end()
+                rest = m.group('rest').strip()
                 if rest:
-                    tmp.extend(self._split_names(rest))
-                continue
+                    items.extend(self._split_names(rest))
+                    continue
+                tail = block[head_end:]
+                for ln in tail.splitlines():
+                    if not ln.strip():
+                        break
+                    if re.match(r'^\s*(o[sš]\s*ra[cč]e|o[sš]\s*fram)\s*:?\s*$', ln, flags=re.IGNORECASE):
+                        break
+                    m_b = re.match(r'^\s*[-–•]\s*(.+)$', ln)
+                    if m_b:
+                        items.extend(self._split_names(m_b.group(1)))
+                    else:
+                        items.extend(self._split_names(ln))
+                break
+            return items
 
-            # navadne alineje
-            if bucket in ("race", "fram"):
-                tmp.extend(self._split_names(ln0))
-            else:
-                generic.extend(self._split_names(ln0))
+        if not race_items:
+            race_items = collect_following_lines(r'ra[cč]e')
+        if not fram_items:
+            fram_items = collect_following_lines(r'fram')
 
-        flush(bucket, tmp)
-        # če ni šolskih sekcij, shrani generični seznam
-        if generic and not (self._awards_by_year.get(year, {}).get("zlata_petica_os_race") or
-                            self._awards_by_year.get(year, {}).get("zlata_petica_os_fram")):
-            self._add_award(year, "zlata_petica", generic)
+        if race_items:
+            self._add_award(year, "zlata_petica_os_race", race_items)
+        if fram_items:
+            self._add_award(year, "zlata_petica_os_fram", fram_items)
+
+        if not race_items and not fram_items:
+            lines = [self._clean_bullet(ln) for ln in block.splitlines()]
+            lines = [ln for ln in lines if ln]
+            generic: List[str] = []
+            for ln in lines:
+                if re.match(r'^\s*o[sš]\s*(ra[cč]e|fram)\s*:?\s*$', ln, flags=re.IGNORECASE):
+                    continue
+                generic.extend(self._split_names(ln))
+            if generic:
+                self._add_award(year, "zlata_petica", generic)
 
     def _build_awards_index(self) -> None:
         logger.info("Gradim indeks nagrad …")
@@ -806,7 +819,6 @@ Samostojno vprašanje:"""
             if not year:
                 continue
 
-            # Zlata petica / Prejemniki Zlate petice
             m_zp = re.search(
                 r"(prejemniki\s+zlat\w*\s+petic\w*|zlat\w*\s+petic\w*)\s*:\s*(.*?)(?:\n\s*\n|$)",
                 text, flags=re.IGNORECASE | re.DOTALL
@@ -814,8 +826,7 @@ Samostojno vprašanje:"""
             if m_zp:
                 self._parse_zlata_petica_block(year, m_zp.group(2).strip())
 
-            # Priznanje župana
-            m_pz = re.search(r"(priznanje\s+župana|priznanje\s+zupana)\s*:\s*(.*?)(?:\n\s*\n|$)",
+            m_pz = re.search(r"(priznanje\s+župana|priznanje\s+zupana|zupanova\s+nagrada|zupanove\s+nagrade)\s*:\s*(.*?)(?:\n\s*\n|$)",
                              text, flags=re.IGNORECASE | re.DOTALL)
             if m_pz:
                 names = []
@@ -824,7 +835,6 @@ Samostojno vprašanje:"""
                     if ln0: names.extend(self._split_names(ln0))
                 self._add_award(year, "priznanje_zupana", names)
 
-            # Spominska plaketa
             m_sp = re.search(r"(spominska\s+plaketa)\s*:\s*(.*?)(?:\n\s*\n|$)",
                              text, flags=re.IGNORECASE | re.DOTALL)
             if m_sp:
@@ -834,7 +844,6 @@ Samostojno vprašanje:"""
                     if ln0: names.extend(self._split_names(ln0))
                 self._add_award(year, "spominska_plaketa", names)
 
-            # Posthumno častni občan
             m_pc = re.search(r"(posthumno\s+častni\s+občan|posthumno\s+castni\s+obcan)\s*:\s*(.*?)(?:\n\s*\n|$)",
                              text, flags=re.IGNORECASE | re.DOTALL)
             if m_pc:
@@ -902,7 +911,6 @@ Samostojno vprašanje:"""
         logger.info("Gradim seznam PGD …")
         possible = []
         if self.collection:
-            # več poizvedb in združen rezultat
             queries = [
                 "pgd gasilsko društvo kontakti rače fram email telefon",
                 "prostovoljno gasilsko društvo Rače Fram Podova Gorica kontakt",
@@ -922,7 +930,6 @@ Samostojno vprašanje:"""
         names = ["PGD Rače","PGD Fram","PGD Podova","PGD Spodnja in Zgornja Gorica"]
         for n in names:
             self._pgd_contacts.setdefault(n.lower(), {"ime": n})
-        # iz metapodatkov, če obstajajo, drugače iz dokumenta
         for d,m in possible:
             low_doc = normalize_text(d)
             for key in list(self._pgd_contacts.keys()):
@@ -986,7 +993,6 @@ Samostojno vprašanje:"""
         return keep_docs, keep_metas
 
     def _zgradi_rag_prompt(self, vprasanje: str, zgodovina: List[Tuple[str, str]]) -> Optional[Tuple[str, str]]:
-        """Vrne (prompt, fallback_raw). fallback_raw je 'varno' besedilo, če LLM pade."""
         logger.info(f"Gradim RAG prompt za vprašanje: '{vprasanje}'")
         if not self.collection:
             return None
@@ -1002,7 +1008,6 @@ Samostojno vprašanje:"""
         docs = results.get('documents', [[]])[0]
         metas = results.get('metadatas', [[]])[0]
 
-        # odstrani urnike odpadkov iz RAG konteksta
         filtered_docs, filtered_metas = [], []
         for d, m in zip(docs, metas):
             if (m.get('kategorija','') or '').lower() == 'odvoz odpadkov':
@@ -1015,14 +1020,12 @@ Samostojno vprašanje:"""
         context_parts = []
         fallback_raw = ""
         for idx, (doc, meta) in enumerate(zip(docs, metas)):
-            # odreži predolge dokumente za LLM
             doc_short = doc[:2500]
             url = meta.get('source_url', '')
             include_url = url_is_relevant(url, doc_short, q_tokens, intent)
             link_line = f"POVEZAVA: {url}" if include_url else "POVEZAVA: "
             context_parts.append(f"--- VIR: {meta.get('source', '?')}\n{link_line}\nVSEBINA: {doc_short}\n")
             if idx == 0:
-                # fallback: kratek izvleček prvega dokumenta
                 head = (meta.get('source') or '').strip()
                 fallback_url = url if include_url else ""
                 fallback_raw = (f"{head}\n{fallback_url}\n{doc_short[:600]}").strip()
@@ -1146,7 +1149,6 @@ ODGOVOR:"""
                 prompt, fallback_raw = built
                 odgovor = self._call_llm(prompt)
                 if not odgovor or odgovor.startswith("Oprostite"):
-                    # SAFE-MODE: LLM je padel – vrni surosti iz baze
                     odgovor = f"**Povzetek iz vira (safe-mode):**\n{fallback_raw}"
 
         # beleženje
@@ -1169,7 +1171,7 @@ def _diag(zupan: VirtualniZupan):
         cnt = zupan.collection.count()
         print(f"Chroma kolekcija: {cfg.COLLECTION_NAME} | dokumentov: {cnt}")
         cats = {}
-        got = zupan.collection.get(limit=2000)  # lite pregled
+        got = zupan.collection.get(limit=2000)
         for m in got.get("metadatas", []):
             cat = (m.get("kategorija") or "?").lower()
             cats[cat] = cats.get(cat, 0) + 1
