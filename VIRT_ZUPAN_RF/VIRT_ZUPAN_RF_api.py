@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.9)
+# VIRT_ZUPAN_RF_api.py  (v52.2)
 
 import os
 import sys
@@ -42,7 +42,7 @@ class Config:
 
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "obcina_race_fram_prod")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-    GENERATOR_MODEL: str = "gpt-5"  # po želji prisilno
+    GENERATOR_MODEL: str = "gpt-5"  # prisilno, po tvoji želji
     OPENAI_TIMEOUT_S: int = int(os.getenv("OPENAI_TIMEOUT_S", "20"))
 
     # NAP
@@ -104,7 +104,6 @@ class Config:
         "zapora_vloga":        {"must": {"zapora", "ceste", "vloga", "obrazec"}, "ban": {"promet", "roadworks", "geojson"}},
     })
 
-    # Kontakti (enostaven, zanesljiv fallback)
     FALLBACK_CONTACT: str = os.getenv("FALLBACK_CONTACT", "Občina Rače-Fram: 02 609 60 10")
     ROAD_CLOSURE_FORM_URL: str = os.getenv("ROAD_CLOSURE_FORM_URL", "https://www.race-fram.si/objava/400297")
     EUPRAVA_GRADBENO_URL: str = os.getenv("EUPRAVA_GRADBENO_URL",
@@ -157,13 +156,30 @@ def strip_generics(s: str) -> str:
     return " ".join(kept)
 
 def gen_street_keys(name: str) -> List[str]:
+    """
+    Ustvari možne ključne oblike ulice/območja, da pokrijemo sklanjatve.
+    Primeri: bistriške -> bistriska; mlinske -> mlinska; slivnici -> slivnica; -ska <-> -ski/-ske
+    """
     base = strip_generics(name)
     base = base.replace("bistriška", "bistriska")
     keys = {base}
-    if base.endswith("ska"): keys.add(base[:-3] + "ski")
-    if base.endswith("ski"): keys.add(base[:-3] + "ska")
-    if base.endswith("a"): keys.add(base[:-1] + "i")
-    if base.endswith("i"): keys.add(base[:-1] + "a")
+
+    # ženski pridevnik -ska/-ske/-ski
+    if base.endswith("ska"): keys.add(base[:-3] + "ski"); keys.add(base[:-3] + "ske")
+    if base.endswith("ski"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ske")
+    if base.endswith("ske"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ski")
+
+    # -a ↔ -i ↔ -e variacije (mlinska/mlinski/mlinske; slivnica/slivnici/slivnice)
+    if base.endswith("a"): 
+        keys.add(base[:-1] + "i")
+        keys.add(base[:-1] + "e")
+    if base.endswith("i"): 
+        keys.add(base[:-1] + "a")
+        keys.add(base[:-1] + "e")
+    if base.endswith("e"): 
+        keys.add(base[:-1] + "a")
+        keys.add(base[:-1] + "i")
+
     return [k for k in keys if k]
 
 def parse_dates_from_text(text: str) -> List[str]:
@@ -197,14 +213,11 @@ def extract_locations_from_naselja(field: str) -> List[str]:
     if not field:
         return []
     clean = re.sub(r'\(h\. *št\..*?\)', '', field, flags=re.IGNORECASE)
-    segments = re.split(r'([A-ZČŠŽ][a-zčšž]+\s*:)', clean)
-    if len(segments) <= 1:
-        segments = [clean]
-    for seg in segments:
+    # razbij po ločilih in dvopičjih
+    for seg in re.split(r'[;,\n]+', clean):
         seg = seg.strip()
-        if not seg or seg.endswith(':'):
+        if not seg:
             continue
-    for seg in re.split(r'[;,]', " ".join(segments)):
         n = normalize_text(seg)
         if n:
             n = n.replace("bistriška", "bistriska")
@@ -252,14 +265,20 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
     if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bzupan\b', q_norm):
         return 'who_is_mayor'
 
-    has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS) or any(p in q_norm for p in cfg.TRANSPORT_PLACES)
     short_followup = bool(re.search(r'^\s*(kaj pa|pa)\b', q_norm)) or bool(re.search(r'\b(v|na|do|iz|od)\s+\w+', q_norm))
+
+    # transport
+    has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS) or any(p in q_norm for p in cfg.TRANSPORT_PLACES)
     if has_transport_hint or (last_intent == 'transport' and short_followup):
         return 'transport'
 
+    # odpadki
     if any(k in q_norm for k in cfg.KLJUCNE_ODPADKI) or get_canonical_waste(q_norm) or ('naslednji' in q_norm):
         return 'waste'
+    if last_intent == 'waste' and short_followup:
+        return 'waste'
 
+    # kontakt
     if any(k in q_norm for k in ['kontakt','kontaktna','stevilka','številka','telefon','e mail','email','mail','naslov','pisarna']):
         return 'contact'
 
@@ -294,7 +313,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.9 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v52.2 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -321,24 +340,27 @@ class VirtualniZupan:
     # ---- infra
     def _call_llm(self, prompt: str, **kwargs) -> str:
         """
-        Klic na chat.completions, z združljivostjo parametra dolžine:
-        - novejši modeli (npr. gpt-5) zahtevajo max_completion_tokens
-        - starejši (gpt-4* / gpt-3.5*) sprejemajo max_tokens
+        Združljiv klic na chat.completions:
+        - gpt-5: uporabi 'max_completion_tokens' in NE pošiljaj 'temperature'
+        - ostali: 'max_tokens' in temperature=0.0
         """
         try:
             client = self.openai_client.with_options(timeout=cfg.OPENAI_TIMEOUT_S)
-
-            # določimo pravo ime parametra
             model_lower = (cfg.GENERATOR_MODEL or "").lower()
-            token_kwarg_name = "max_completion_tokens" if ("gpt-5" in model_lower or "o4" in model_lower) else "max_tokens"
+
+            is_gpt5_like = "gpt-5" in model_lower or model_lower.startswith("gpt5") or "o4" in model_lower
             token_limit = kwargs.get("max_tokens", 600)
 
             create_kwargs = {
                 "model": cfg.GENERATOR_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.0,
             }
-            create_kwargs[token_kwarg_name] = token_limit
+            if is_gpt5_like:
+                create_kwargs["max_completion_tokens"] = token_limit
+                # temperature ne dodamo (privzeto 1 pri modelu)
+            else:
+                create_kwargs["max_tokens"] = token_limit
+                create_kwargs["temperature"] = 0.0
 
             res = client.chat.completions.create(**create_kwargs)
             content = (res.choices[0].message.content or "").strip()
@@ -646,9 +668,9 @@ class VirtualniZupan:
             area = normalize_text(meta.get('obmocje', '') or '')
             self._area_type_docs[(area, tip)] = doc_text
             streets = extract_locations_from_naselja(meta.get('naselja', '') or '')
-            for s in streets:
-                display = s
-                for key in gen_street_keys(s):
+            for s_norm in streets:
+                display = s_norm  # nimamo zanesljive diakritike v virih; prikažemo kapitalizirano
+                for key in gen_street_keys(s_norm):
                     self._street_index.setdefault(key, []).append({
                         "area": area, "tip": tip, "doc": doc_text, "display": display
                     })
@@ -1037,18 +1059,18 @@ ODGOVOR:"""
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora: List[Tuple[str, str]], zadnje_vprasanje: str, stanje: Dict[str, Any]) -> str:
         if not zgodovina_pogovora:
             return zadnje_vprasanje
-        return zadnje_vprasanje  # transport rešujemo posebej
+        return zadnje_vprasanje  # transport/waste rešujemo posebej
 
     def _answer_contacts(self, q_norm: str) -> str:
-        """
-        Enostaven, determinističen odgovor za 'kontakt' brez RAG-a (da se izognemo nenavadnim zadetkom).
-        Podprti posebni ključi: 'os fram', 'os rače/rače'.
-        """
+        # posebni primeri
+        if "karmen" in q_norm and "kotnik" in q_norm:
+            return ("**Direktorica občinske uprave – mag. Karmen Kotnik**\n"
+                    "Za stik uporabi **tajništvo Občine Rače-Fram: 02 609 60 10** (preusmerijo naprej).")
         if re.search(r'\bos\s*fram\b', q_norm):
             return ("**Kontakt OŠ Fram**\n"
                     "- Telefon: 02 603 56 00\n"
                     "- Splet: osfram.si\n"
-                    "- Za prevoze: " + cfg.TRANSPORT_CONTACT_URL)
+                    f"- Prevozi: {cfg.TRANSPORT_CONTACT_URL}")
         if re.search(r'\bos\s*rac?e\b', q_norm):
             return ("**Kontakt OŠ Rače**\n"
                     "- Telefon: 02 609 71 00\n"
@@ -1209,6 +1231,14 @@ class _MiniTests(unittest.TestCase):
         vz = VirtualniZupan()
         ans = vz._answer_contacts(normalize_text("rabim kontakt"))
         self.assertIn("Kontakt občine", ans)
+
+    def test_followup_waste_intent(self):
+        q = normalize_text("kaj pa iz mlinske")
+        self.assertEqual(detect_intent_qna(q, last_intent='waste'), 'waste')
+
+    def test_gen_street_keys_mlinske(self):
+        ks = set(gen_street_keys("mlinske"))
+        self.assertTrue("mlinska" in ks or "mlinski" in ks)
 
 if __name__ == "__main__":
     zupan = VirtualniZupan()
