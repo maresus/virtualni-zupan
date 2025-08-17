@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.7)
+# VIRT_ZUPAN_RF_api.py  (v51.8)
 
 import os
 import sys
@@ -12,6 +12,7 @@ from typing import Optional, List, Dict, Any, Tuple, Set
 from collections import Counter
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
+import unittest
 
 import requests
 import chromadb
@@ -41,7 +42,7 @@ class Config:
 
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "obcina_race_fram_prod")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-    # Vedno uporabljaj GPT-5
+    # Vedno uporabljaj GPT-5 (po želji)
     GENERATOR_MODEL: str = "gpt-5"
     OPENAI_TIMEOUT_S: int = int(os.getenv("OPENAI_TIMEOUT_S", "20"))
 
@@ -265,9 +266,9 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
         return 'komunalni_prispevek'
     if 'gradben' in q_norm and 'dovoljen' in q_norm:
         return 'gradbeno'
-    if 'poletn' in q_norm and ('tabor' in q_norm ali 'kamp' in q_norm or 'varstvo' in q_norm):
+    if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
-    if 'pgd' in q_norm ali 'gasil' v q_norm:
+    if 'pgd' in q_norm or 'gasil' in q_norm:
         return 'pgd'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben', 'pgd', 'gasil', 'zapora', 'nagrad']):
         return 'fram_info'
@@ -292,7 +293,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.7 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v51.8 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -314,7 +315,6 @@ class VirtualniZupan:
         self._awards_by_year: Dict[int, Dict[str, List[str]]] = {}
         self._pgd_contacts: Dict[str, Dict[str, str]] = {}
 
-        # dodatni log, da vidimo kateri model teče
         logger.info(f"Uporabljeni generativni model: {cfg.GENERATOR_MODEL}")
 
     # ---- infra
@@ -325,7 +325,7 @@ class VirtualniZupan:
                 model=cfg.GENERATOR_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=kwargs.get("max_tokens", 600),  # malo višje kot prej
+                max_tokens=kwargs.get("max_tokens", 600),
             )
             content = (res.choices[0].message.content or "").strip()
             return content if content else "Oprostite, prišlo je do napake pri generiranju odgovora."
@@ -377,11 +377,10 @@ class VirtualniZupan:
     @staticmethod
     def _norm_place(txt: str) -> str:
         t = normalize_text(txt)
-        # osnovne normalizacije
         repl = {
             "o s fram":"os fram",
             "o s race":"os race",
-            "brunsvik":"brunsvik",  # ASCII različica
+            "brunsvik":"brunsvik",
         }
         for k,v in repl.items():
             t = t.replace(k, v)
@@ -389,9 +388,7 @@ class VirtualniZupan:
 
     @staticmethod
     def _canon_place(tok: str) -> Optional[str]:
-        """Pretvori poljuben token v kanonično ime kraja."""
         t = normalize_text(tok)
-        # dovolimo sklanjatve z \w* pri iskanju, tukaj pa heuristično krajšamo na koren
         if re.search(r'\bos\s*fram\w*\b', t): return "OŠ Fram"
         if re.search(r'\bos\s*rac?e\w*\b', t): return "OŠ Rače"
         if re.search(r'\bkopivnik\w*\b', t):   return "Kopivnik"
@@ -403,13 +400,6 @@ class VirtualniZupan:
         return None
 
     def _extract_route(self, q_norm: str, stanje: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """
-        Vrne (origin, destination, time_hint).
-        Podpira:
-          - 'od OŠ Fram do Kopivnika' (sklanjatve: 'kopivnika', 'iz', 'v', 'na')
-          - nadaljevanja: 'kaj pa v Morje', 'pa iz Kopivnika'
-          - enobesedne odgovore: 'kopivnik' ali 'fram'
-        """
         origin = None
         dest = None
         time_hint = None
@@ -417,14 +407,12 @@ class VirtualniZupan:
         if re.search(r'\bzjutraj\b', q_norm): time_hint = "zjutraj"
         if re.search(r'\bpopoldne\b', q_norm): time_hint = "popoldne"
 
-        # 1) polni vzorec 'od X (do|v|na) Y' z upoštevanjem sklanjatev
         place_rx = r'(os\s*fram\w*|os\s*rac?e\w*|kopivnik\w*|morje\w*|slivnic\w*|brun[sš]?vik\w*|fram\w*|rac?e\w*)'
         m1 = re.search(rf'\bod\s+{place_rx}.*?\b(do|v|na)\s+{place_rx}\b', q_norm)
         if m1:
             origin = self._canon_place(m1.group(1))
             dest   = self._canon_place(m1.group(3))
 
-        # 2) 'iz/od X' ali '(do|v|na) Y' samostojno
         if not origin or not dest:
             m2o = re.search(rf'\b(iz|od)\s+{place_rx}\b', q_norm)
             m2d = re.search(rf'\b(do|v|na)\s+{place_rx}\b', q_norm)
@@ -433,7 +421,6 @@ class VirtualniZupan:
             if m2d:
                 dest = dest or self._canon_place(m2d.group(2))
 
-        # 3) enobesedni (nadaljevalni) vnos – če uporabnik napiše samo "kopivnik"
         if not dest:
             single = self._canon_place(q_norm)
             if single:
@@ -445,7 +432,6 @@ class VirtualniZupan:
                     else:
                         dest = single
 
-        # 4) nadaljevanja: uporabi spomin
         if not origin:
             origin = self._canon_place(stanje.get('transport_last_origin') or "")
         if not dest:
@@ -456,7 +442,6 @@ class VirtualniZupan:
     def _answer_transport(self, q_raw: str, q_norm: str, stanje: Dict[str, Any]) -> str:
         origin, dest, time_hint = self._extract_route(q_norm, stanje)
 
-        # odločanje dialoga
         if not origin and not dest:
             stanje['namen'] = 'transport'
             stanje['transport_waiting'] = 'route'
@@ -472,7 +457,6 @@ class VirtualniZupan:
             stanje['transport_waiting'] = 'origin'
             return "Iz kje pa? (npr. 'iz OŠ Fram', 'iz OŠ Rače')"
 
-        # imamo oboje
         stanje['transport_last_origin'] = origin
         stanje['transport_last_dest']   = dest
         stanje['namen'] = 'transport'
@@ -481,7 +465,6 @@ class VirtualniZupan:
         def is_pair(a, b, A, B):
             return (normalize_text(a) == normalize_text(A) and normalize_text(b) == normalize_text(B))
 
-        # ročno znana relacija
         if (is_pair(origin, dest, "OŠ Fram", "Kopivnik") or is_pair(origin, dest, "Kopivnik", "OŠ Fram")):
             out_lines = [f"**Prevoz {origin} → {dest}:**"]
             if not time_hint or time_hint == "zjutraj":
@@ -491,7 +474,6 @@ class VirtualniZupan:
             out_lines.append(f"**{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
             return "\n".join(out_lines)
 
-        # poizkus iz baze
         if self.collection:
             q_texts = [
                 f"prevoz {origin} {dest} vozni red odhod prihod",
@@ -624,7 +606,7 @@ class VirtualniZupan:
             geo_ok = self._geometry_near_municipality(geom)
             has_anchor = any(k in cel for k in cfg.PROMET_FILTER)
             has_ban    = any(b in cel for b in cfg.PROMET_BAN)
-            if (geo_ok ali has_anchor) and not has_ban:
+            if (geo_ok or has_anchor) and not has_ban:
                 relevantne.append(props)
 
         if not relevantne:
@@ -651,7 +633,7 @@ class VirtualniZupan:
         if not self.collection:
             return
         all_docs = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
-        if not all_docs ali not all_docs.get('ids'):
+        if not all_docs or not all_docs.get('ids'):
             logger.warning("Ni dokumentov za odpadke.")
             return
         for i in range(len(all_docs['ids'])):
@@ -718,7 +700,7 @@ class VirtualniZupan:
                     dd, mm = d.replace('.',' ').strip().split()[:2]
                     dt = datetime(year, int(mm), int(dd)).date()
                     if dt < today: dt = datetime(year + 1, int(mm), int(dd)).date()
-                    if not cand ali dt < cand[0]: cand = (dt, f"{dd}.{mm}.")
+                    if not cand or dt < cand[0]: cand = (dt, f"{dd}.{mm}.")
                 except Exception:
                     continue
             if cand: return f"Naslednji odvoz za **{tip_odpadka}** na **{street_display.title()}** je **{cand[1]}**."
@@ -886,8 +868,8 @@ class VirtualniZupan:
 
     def _format_awards_all(self, year: int, data: Dict[str, List[str]]) -> str:
         parts = []
-        if data.get("zlata_petica_os_race") ali data.get("zlata_petica_os_fram") ali data.get("zlata_petica"):
-            if data.get("zlata_petica_os_race") ali data.get("zlata_petica_os_fram"):
+        if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram") or data.get("zlata_petica"):
+            if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram"):
                 if data.get("zlata_petica_os_race"):
                     parts.append("**Zlata petica – OŠ Rače:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_race"]))
                 if data.get("zlata_petica_os_fram"):
@@ -1047,7 +1029,7 @@ ZGODOVINA POGOVORA:
 ---
 VPRAŠANJE: "{vprasanje}"
 ODGOVOR:"""
-        return (prompt, fallback_raw ali "Žal nimam dovolj podatkov.")
+        return (prompt, fallback_raw or "Žal nimam dovolj podatkov.")
 
     # ---------------------- GLAVNI VMESNIK ----------------------
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora: List[Tuple[str, str]], zadnje_vprasanje: str, stanje: Dict[str, Any]) -> str:
@@ -1111,9 +1093,9 @@ ODGOVOR:"""
         else:
             pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje, stanje)
 
-        if intent == 'transport' ali (stanje.get('namen') == 'transport' and stanje.get('transport_waiting')):
+        if intent == 'transport' or (stanje.get('namen') == 'transport' and stanje.get('transport_waiting')):
             odgovor = self._answer_transport(uporabnikovo_vprasanje, q_norm, stanje)
-        elif intent == 'waste' ali (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
+        elif intent == 'waste' or (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif intent == 'traffic':
             if stanje.get('namen') == 'odpadki' and not (stanje.get('caka_na') in ('lokacija','tip')):
@@ -1144,7 +1126,7 @@ ODGOVOR:"""
             else:
                 prompt, fallback_raw = built
                 odgovor = self._call_llm(prompt)
-                if not odgovor ali odgovor.startswith("Oprostite"):
+                if not odgovor or odgovor.startswith("Oprostite"):
                     odgovor = f"**Povzetek iz vira (safe-mode):**\n{fallback_raw}"
 
         # beleženje
@@ -1155,7 +1137,7 @@ ODGOVOR:"""
         return odgovor
 
 # ------------------------------------------------------------------------------
-# 5) CLI
+# 5) CLI + DIAG + SELFTEST
 # ------------------------------------------------------------------------------
 def _diag(zupan: VirtualniZupan):
     print("== DIAGNOSTIKA ==")
@@ -1175,13 +1157,40 @@ def _diag(zupan: VirtualniZupan):
     except Exception as e:
         print("Napaka diagnostike:", e)
 
+class _MiniTests(unittest.TestCase):
+    def test_detect_camp(self):
+        q = normalize_text("Kdaj je poletni tabor in varstvo?")
+        self.assertEqual(detect_intent_qna(q), 'camp')
+
+    def test_detect_pgd(self):
+        q = normalize_text("Imate kontakt PGD Fram ali številko gasilcev?")
+        self.assertEqual(detect_intent_qna(q), 'pgd')
+
+    def test_transport_extract(self):
+        vz = VirtualniZupan()
+        qn = normalize_text("od OŠ Fram do Kopivnika zjutraj")
+        o, d, t = vz._extract_route(qn, {})
+        self.assertEqual(o, "OŠ Fram")
+        self.assertEqual(d, "Kopivnik")
+        self.assertEqual(t, "zjutraj")
+
+    def test_waste_parse_dates(self):
+        txt = "Odvoz: 14.9., 28.9., 12.10."
+        dates = parse_dates_from_text(txt)
+        self.assertEqual(dates, ["14.9.", "28.9.", "12.10."])
+
 if __name__ == "__main__":
     zupan = VirtualniZupan()
 
-    # preprosti arg switch-i
     args = sys.argv[1:]
     if "--diag" in args:
         _diag(zupan); sys.exit(0)
+    if "--selftest" in args:
+        # Poženi mini unit teste brez izhoda iz procesa Render builda
+        suite = unittest.defaultTestLoader.loadTestsFromTestCase(_MiniTests)
+        runner = unittest.TextTestRunner(verbosity=2)
+        result = runner.run(suite)
+        sys.exit(0 if result.wasSuccessful() else 1)
 
     zupan.nalozi_bazo()
     if not zupan.collection:
