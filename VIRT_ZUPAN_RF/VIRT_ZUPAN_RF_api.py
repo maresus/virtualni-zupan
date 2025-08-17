@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.8)
+# VIRT_ZUPAN_RF_api.py  (v51.9)
 
 import os
 import sys
@@ -42,8 +42,7 @@ class Config:
 
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "obcina_race_fram_prod")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-    # Vedno uporabljaj GPT-5 (po želji)
-    GENERATOR_MODEL: str = "gpt-5"
+    GENERATOR_MODEL: str = "gpt-5"  # po želji prisilno
     OPENAI_TIMEOUT_S: int = int(os.getenv("OPENAI_TIMEOUT_S", "20"))
 
     # NAP
@@ -105,6 +104,7 @@ class Config:
         "zapora_vloga":        {"must": {"zapora", "ceste", "vloga", "obrazec"}, "ban": {"promet", "roadworks", "geojson"}},
     })
 
+    # Kontakti (enostaven, zanesljiv fallback)
     FALLBACK_CONTACT: str = os.getenv("FALLBACK_CONTACT", "Občina Rače-Fram: 02 609 60 10")
     ROAD_CLOSURE_FORM_URL: str = os.getenv("ROAD_CLOSURE_FORM_URL", "https://www.race-fram.si/objava/400297")
     EUPRAVA_GRADBENO_URL: str = os.getenv("EUPRAVA_GRADBENO_URL",
@@ -204,11 +204,11 @@ def extract_locations_from_naselja(field: str) -> List[str]:
         seg = seg.strip()
         if not seg or seg.endswith(':'):
             continue
-        for sub in seg.split(','):
-            n = normalize_text(sub)
-            if n:
-                n = n.replace("bistriška", "bistriska")
-                parts.add(n)
+    for seg in re.split(r'[;,]', " ".join(segments)):
+        n = normalize_text(seg)
+        if n:
+            n = n.replace("bistriška", "bistriska")
+            parts.add(n)
     return list(parts)
 
 def tokens_from_text(s: str) -> set:
@@ -260,8 +260,9 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
     if any(k in q_norm for k in cfg.KLJUCNE_ODPADKI) or get_canonical_waste(q_norm) or ('naslednji' in q_norm):
         return 'waste'
 
-    if 'kontakt' in q_norm or 'telefon' in q_norm or 'e mail' in q_norm or 'stevilka' in q_norm:
+    if any(k in q_norm for k in ['kontakt','kontaktna','stevilka','številka','telefon','e mail','email','mail','naslov','pisarna']):
         return 'contact'
+
     if 'komunaln' in q_norm and 'prispev' in q_norm:
         return 'komunalni_prispevek'
     if 'gradben' in q_norm and 'dovoljen' in q_norm:
@@ -293,7 +294,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.8 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v51.9 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -319,14 +320,27 @@ class VirtualniZupan:
 
     # ---- infra
     def _call_llm(self, prompt: str, **kwargs) -> str:
+        """
+        Klic na chat.completions, z združljivostjo parametra dolžine:
+        - novejši modeli (npr. gpt-5) zahtevajo max_completion_tokens
+        - starejši (gpt-4* / gpt-3.5*) sprejemajo max_tokens
+        """
         try:
             client = self.openai_client.with_options(timeout=cfg.OPENAI_TIMEOUT_S)
-            res = client.chat.completions.create(
-                model=cfg.GENERATOR_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-                max_tokens=kwargs.get("max_tokens", 600),
-            )
+
+            # določimo pravo ime parametra
+            model_lower = (cfg.GENERATOR_MODEL or "").lower()
+            token_kwarg_name = "max_completion_tokens" if ("gpt-5" in model_lower or "o4" in model_lower) else "max_tokens"
+            token_limit = kwargs.get("max_tokens", 600)
+
+            create_kwargs = {
+                "model": cfg.GENERATOR_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.0,
+            }
+            create_kwargs[token_kwarg_name] = token_limit
+
+            res = client.chat.completions.create(**create_kwargs)
             content = (res.choices[0].message.content or "").strip()
             return content if content else "Oprostite, prišlo je do napake pri generiranju odgovora."
         except OpenAIError:
@@ -374,18 +388,6 @@ class VirtualniZupan:
             logger.exception(f"Napaka pri beleženju pogovora za sejo {session_id}")
 
     # ---------------------- TRANSPORT ----------------------
-    @staticmethod
-    def _norm_place(txt: str) -> str:
-        t = normalize_text(txt)
-        repl = {
-            "o s fram":"os fram",
-            "o s race":"os race",
-            "brunsvik":"brunsvik",
-        }
-        for k,v in repl.items():
-            t = t.replace(k, v)
-        return t
-
     @staticmethod
     def _canon_place(tok: str) -> Optional[str]:
         t = normalize_text(tok)
@@ -991,7 +993,7 @@ class VirtualniZupan:
         q_norm = normalize_text(vprasanje)
         intent = detect_intent_qna(q_norm)
         q_tokens = tokens_from_text(q_norm)
-        if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor","transport"):
+        if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor","transport","contact"):
             return None
         results = self.collection.query(query_texts=[q_norm], n_results=cfg.RAG_TOPK, include=["documents", "metadatas"])
         docs = results.get('documents', [[]])[0]; metas = results.get('metadatas', [[]])[0]
@@ -1037,6 +1039,22 @@ ODGOVOR:"""
             return zadnje_vprasanje
         return zadnje_vprasanje  # transport rešujemo posebej
 
+    def _answer_contacts(self, q_norm: str) -> str:
+        """
+        Enostaven, determinističen odgovor za 'kontakt' brez RAG-a (da se izognemo nenavadnim zadetkom).
+        Podprti posebni ključi: 'os fram', 'os rače/rače'.
+        """
+        if re.search(r'\bos\s*fram\b', q_norm):
+            return ("**Kontakt OŠ Fram**\n"
+                    "- Telefon: 02 603 56 00\n"
+                    "- Splet: osfram.si\n"
+                    "- Za prevoze: " + cfg.TRANSPORT_CONTACT_URL)
+        if re.search(r'\bos\s*rac?e\b', q_norm):
+            return ("**Kontakt OŠ Rače**\n"
+                    "- Telefon: 02 609 71 00\n"
+                    "- Splet: os-race.si")
+        return "**Kontakt občine:** " + cfg.FALLBACK_CONTACT
+
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
         self.nalozi_bazo()
         if not self.collection:
@@ -1054,6 +1072,14 @@ ODGOVOR:"""
         if intent == 'zapora_vloga':
             odgovor = (f"**Vloga za zaporo ceste**: obrazec in navodila → {cfg.ROAD_CLOSURE_FORM_URL}\n\n"
                        f"- Priloži skico/načrt zapore in terminski plan.\n- Oddaj pravočasno pred predvideno zaporo.")
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            stanje['last_intent'] = intent
+            if len(zgodovina) > 4: zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        if intent == 'contact':
+            odgovor = self._answer_contacts(q_norm)
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             stanje['last_intent'] = intent
             if len(zgodovina) > 4: zgodovina.pop(0)
@@ -1087,7 +1113,7 @@ ODGOVOR:"""
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, out)
             return out
 
-        # preoblikovanje (LLM) uporabljamo le za RAG teme, ne za transport
+        # preoblikovanje (LLM) uporabljamo le za RAG teme, ne za transport/waste/traffic/contact
         if intent in ('waste','traffic','transport'):
             pametno_vprasanje = uporabnikovo_vprasanje
         else:
@@ -1179,6 +1205,11 @@ class _MiniTests(unittest.TestCase):
         dates = parse_dates_from_text(txt)
         self.assertEqual(dates, ["14.9.", "28.9.", "12.10."])
 
+    def test_contact_intent(self):
+        vz = VirtualniZupan()
+        ans = vz._answer_contacts(normalize_text("rabim kontakt"))
+        self.assertIn("Kontakt občine", ans)
+
 if __name__ == "__main__":
     zupan = VirtualniZupan()
 
@@ -1186,7 +1217,6 @@ if __name__ == "__main__":
     if "--diag" in args:
         _diag(zupan); sys.exit(0)
     if "--selftest" in args:
-        # Poženi mini unit teste brez izhoda iz procesa Render builda
         suite = unittest.defaultTestLoader.loadTestsFromTestCase(_MiniTests)
         runner = unittest.TextTestRunner(verbosity=2)
         result = runner.run(suite)
