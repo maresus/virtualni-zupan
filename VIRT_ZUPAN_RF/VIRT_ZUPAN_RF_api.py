@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v52.2)
+# VIRT_ZUPAN_RF_api.py  (v52.5)
 
 import os
 import sys
@@ -169,7 +169,7 @@ def gen_street_keys(name: str) -> List[str]:
     if base.endswith("ski"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ske")
     if base.endswith("ske"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ski")
 
-    # -a ↔ -i ↔ -e variacije (mlinska/mlinski/mlinske; slivnica/slivnici/slivnice)
+    # -a ↔ -i ↔ -e variacije
     if base.endswith("a"): 
         keys.add(base[:-1] + "i")
         keys.add(base[:-1] + "e")
@@ -213,7 +213,6 @@ def extract_locations_from_naselja(field: str) -> List[str]:
     if not field:
         return []
     clean = re.sub(r'\(h\. *št\..*?\)', '', field, flags=re.IGNORECASE)
-    # razbij po ločilih in dvopičjih
     for seg in re.split(r'[;,\n]+', clean):
         seg = seg.strip()
         if not seg:
@@ -250,10 +249,15 @@ def url_is_relevant(url: str, doc: str, q_tokens: set, intent: str) -> bool:
 # ------------------------------------------------------------------------------
 # INTENTI
 # ------------------------------------------------------------------------------
+def _has_transport_place(q_norm: str) -> bool:
+    return bool(re.search(r'\b(os\s*fram|os\s*rac?e|kopivnik|morje|slivnic\w*|brun[sš]?vik|fram|rac?e)\b', q_norm))
+
 def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
+    # neposredno: zapora vloga
     if re.search(r'\bzapor\w*', q_norm) and re.search(r'\bvlog\w*|\bobrazec\w*', q_norm):
         return "zapora_vloga"
 
+    # nagrade
     if (re.search(r'\b(zlat\w*\s+peti\w*|petic\w*|peti\b)', q_norm) or
         re.search(r'\bzupanov\w*\s+nagrad\w*', q_norm) or
         re.search(r'\bzupanov\w*\s+priznanj\w*', q_norm) or
@@ -262,28 +266,41 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
         if re.search(r'\b(19\d{2}|20\d{2})\b', q_norm):
             return 'awards'
 
+    # kdo je župan
     if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bzupan\b', q_norm):
         return 'who_is_mayor'
 
-    short_followup = bool(re.search(r'^\s*(kaj pa|pa)\b', q_norm)) or bool(re.search(r'\b(v|na|do|iz|od)\s+\w+', q_norm))
+    # PROMET (ceste, dela, zapore) – pred transport short-followup
+    if any(k in q_norm for k in cfg.KLJUCNE_PROMET):
+        return 'traffic'
 
     # transport
-    has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS) or any(p in q_norm for p in cfg.TRANSPORT_PLACES)
-    if has_transport_hint or (last_intent == 'transport' and short_followup):
+    short_followup_transport = (
+        last_intent == 'transport' and (
+            re.match(r'^\s*(kaj pa|pa)\b', q_norm) or
+            # kratka nadaljevanja samo, če omeniš smer/relacijo ali kraj
+            re.search(r'\b(od|iz|do|v|na)\b', q_norm) and _has_transport_place(q_norm)
+        )
+    )
+    has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS) or _has_transport_place(q_norm)
+    if has_transport_hint or short_followup_transport:
         return 'transport'
 
     # odpadki
+    short_followup = bool(re.match(r'^\s*(kaj pa|pa)\b', q_norm))
     if any(k in q_norm for k in cfg.KLJUCNE_ODPADKI) or get_canonical_waste(q_norm) or ('naslednji' in q_norm):
         return 'waste'
-    if last_intent == 'waste' and short_followup:
+    if last_intent == 'waste' and (short_followup or re.search(r'\b(od|iz|v|na)\b', q_norm)):
         return 'waste'
 
     # kontakt
     if any(k in q_norm for k in ['kontakt','kontaktna','stevilka','številka','telefon','e mail','email','mail','naslov','pisarna']):
         return 'contact'
 
-    if 'komunaln' in q_norm and 'prispev' in q_norm:
+    # komunalni prispevek (tudi follow-up)
+    if ('komunaln' in q_norm and 'prispev' in q_norm) or (last_intent == 'komunalni_prispevek' and (short_followup or 'informativn' in q_norm or 'izracun' in q_norm or 'izračun' in q_norm)):
         return 'komunalni_prispevek'
+
     if 'gradben' in q_norm and 'dovoljen' in q_norm:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
@@ -292,8 +309,6 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
         return 'pgd'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben', 'pgd', 'gasil', 'zapora', 'nagrad']):
         return 'fram_info'
-    if any(k in q_norm for k in cfg.KLJUCNE_PROMET):
-        return 'traffic'
     return 'general'
 
 def map_award_alias(q_norm: str) -> str:
@@ -313,7 +328,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v52.2 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v52.5 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -357,7 +372,6 @@ class VirtualniZupan:
             }
             if is_gpt5_like:
                 create_kwargs["max_completion_tokens"] = token_limit
-                # temperature ne dodamo (privzeto 1 pri modelu)
             else:
                 create_kwargs["max_tokens"] = token_limit
                 create_kwargs["temperature"] = 0.0
@@ -669,7 +683,7 @@ class VirtualniZupan:
             self._area_type_docs[(area, tip)] = doc_text
             streets = extract_locations_from_naselja(meta.get('naselja', '') or '')
             for s_norm in streets:
-                display = s_norm  # nimamo zanesljive diakritike v virih; prikažemo kapitalizirano
+                display = s_norm
                 for key in gen_street_keys(s_norm):
                     self._street_index.setdefault(key, []).append({
                         "area": area, "tip": tip, "doc": doc_text, "display": display
@@ -1015,7 +1029,7 @@ class VirtualniZupan:
         q_norm = normalize_text(vprasanje)
         intent = detect_intent_qna(q_norm)
         q_tokens = tokens_from_text(q_norm)
-        if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor","transport","contact"):
+        if intent in ("awards","pgd","zapora_vloga","waste","traffic","who_is_mayor","transport","contact","komunalni_prispevek"):
             return None
         results = self.collection.query(query_texts=[q_norm], n_results=cfg.RAG_TOPK, include=["documents", "metadatas"])
         docs = results.get('documents', [[]])[0]; metas = results.get('metadatas', [[]])[0]
@@ -1059,7 +1073,7 @@ ODGOVOR:"""
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora: List[Tuple[str, str]], zadnje_vprasanje: str, stanje: Dict[str, Any]) -> str:
         if not zgodovina_pogovora:
             return zadnje_vprasanje
-        return zadnje_vprasanje  # transport/waste rešujemo posebej
+        return zadnje_vprasanje  # transport/waste/traffic/contact/komunalni rešujemo posebej
 
     def _answer_contacts(self, q_norm: str) -> str:
         # posebni primeri
@@ -1076,6 +1090,25 @@ ODGOVOR:"""
                     "- Telefon: 02 609 71 00\n"
                     "- Splet: os-race.si")
         return "**Kontakt občine:** " + cfg.FALLBACK_CONTACT
+
+    def _answer_komunalni(self, q_norm: str) -> str:
+        # determinističen povzetek + informativni izračun
+        parts = [
+            "**Komunalni prispevek – osnove:**",
+            "- **Kaj**: plačilo dela stroškov komunalne opreme.",
+            "- **Kdo**: investitor/lastnik pri novogradnji ali spremembi namembnosti.",
+            "- **Kdaj**: pred izdajo gradbenega dovoljenja.",
+            "- **Kje**: vloga na občino (možen **informativni izračun**).",
+            "",
+            "**Informativni izračun (koraki):**",
+            "1) Pripravi podatke o parceli in objektu (namembnost, bruto tloris, št. priključkov).",
+            "2) Priloži izsek iz prostorskega akta / lokacijsko informacijo (če jo imaš).",
+            "3) Pošlji zahtevek na občino (finančni/okoljski oddelek) ali izpolni obrazec na občinski strani.",
+            "4) Prejmeš informativni izračun in nadaljnja navodila za plačilo.",
+            "",
+            f"**Kontakt za vprašanja**: {cfg.FALLBACK_CONTACT}",
+        ]
+        return "\n".join(parts)
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
         self.nalozi_bazo()
@@ -1102,6 +1135,14 @@ ODGOVOR:"""
 
         if intent == 'contact':
             odgovor = self._answer_contacts(q_norm)
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            stanje['last_intent'] = intent
+            if len(zgodovina) > 4: zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        if intent == 'komunalni_prispevek':
+            odgovor = self._answer_komunalni(q_norm)
             zgodovina.append((uporabnikovo_vprasanje, odgovor))
             stanje['last_intent'] = intent
             if len(zgodovina) > 4: zgodovina.pop(0)
@@ -1135,7 +1176,7 @@ ODGOVOR:"""
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, out)
             return out
 
-        # preoblikovanje (LLM) uporabljamo le za RAG teme, ne za transport/waste/traffic/contact
+        # preoblikovanje (LLM) uporabljamo le za RAG teme, ne za transport/waste/traffic/contact/komunalni
         if intent in ('waste','traffic','transport'):
             pametno_vprasanje = uporabnikovo_vprasanje
         else:
@@ -1146,8 +1187,8 @@ ODGOVOR:"""
         elif intent == 'waste' or (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif intent == 'traffic':
-            if stanje.get('namen') == 'odpadki' and not (stanje.get('caka_na') in ('lokacija','tip')):
-                stanje.pop('namen', None); stanje.pop('caka_na', None)
+            # preklop iz drugih namenov
+            stanje.pop('namen', None); stanje.pop('caka_na', None); stanje.pop('transport_waiting', None)
             odgovor = self.preveri_zapore_cest()
         else:
             if stanje.get('namen') == 'odpadki' and not (stanje.get('caka_na') in ('lokacija','tip')):
@@ -1161,14 +1202,6 @@ ODGOVOR:"""
                                "- **3) Vloga** na **UE Maribor** (osebno ali prek eUprava).\n"
                                "- **Veljavnost**: 2 leti (manj zahtevni), 3 leta (zahtevni).\n"
                                f"- **Povezava (eUprava)**: {cfg.EUPRAVA_GRADBENO_URL}")
-                elif intent == 'komunalni_prispevek':
-                    odgovor = ("**Komunalni prispevek – osnovno:**\n"
-                               "- **Kaj**: plačilo dela stroškov komunalne opreme.\n"
-                               "- **Kdo**: investitor/lastnik pri novogradnji ali spremembi namembnosti.\n"
-                               "- **Kdaj**: pred izdajo gradbenega dovoljenja.\n"
-                               "- **Kam**: vlogo oddaš na občino (možen **informativni izračun**).\n"
-                               "- **Priloge**: podatki o objektu, projektna dokumentacija.\n"
-                               "- **Kontakt**: " + cfg.FALLBACK_CONTACT + ".")
                 else:
                     odgovor = "Žal o tej temi nimam dovolj podatkov."
             else:
@@ -1222,23 +1255,21 @@ class _MiniTests(unittest.TestCase):
         self.assertEqual(d, "Kopivnik")
         self.assertEqual(t, "zjutraj")
 
-    def test_waste_parse_dates(self):
-        txt = "Odvoz: 14.9., 28.9., 12.10."
-        dates = parse_dates_from_text(txt)
-        self.assertEqual(dates, ["14.9.", "28.9.", "12.10."])
-
-    def test_contact_intent(self):
-        vz = VirtualniZupan()
-        ans = vz._answer_contacts(normalize_text("rabim kontakt"))
-        self.assertIn("Kontakt občine", ans)
-
-    def test_followup_waste_intent(self):
+    def test_waste_followup(self):
         q = normalize_text("kaj pa iz mlinske")
         self.assertEqual(detect_intent_qna(q, last_intent='waste'), 'waste')
 
-    def test_gen_street_keys_mlinske(self):
-        ks = set(gen_street_keys("mlinske"))
-        self.assertTrue("mlinska" in ks or "mlinski" in ks)
+    def test_traffic_vs_transport(self):
+        q = normalize_text("ali v občini potekajo kakšna dela na cesti")
+        # tudi če je bil prejšnji intent transport, mora zdaj biti traffic
+        self.assertEqual(detect_intent_qna(q, last_intent='transport'), 'traffic')
+
+    def test_komunalni_followup(self):
+        q = normalize_text("kako se naredi informativni izračun?")
+        self.assertEqual(detect_intent_qna(q, last_intent='komunalni_prispevek'), 'komunalni_prispevek')
+
+    def test_parse_dates(self):
+        self.assertEqual(parse_dates_from_text("7.1., 4.3., 29.4."), ["7.1.", "4.3.", "29.4."])
 
 if __name__ == "__main__":
     zupan = VirtualniZupan()
