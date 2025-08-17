@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v51.6)
+# VIRT_ZUPAN_RF_api.py  (v51.7)
 
 import os
 import sys
@@ -41,7 +41,8 @@ class Config:
 
     COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "obcina_race_fram_prod")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-    GENERATOR_MODEL: str = os.getenv("GENERATOR_MODEL", "gpt-4o-mini")
+    # Vedno uporabljaj GPT-5
+    GENERATOR_MODEL: str = "gpt-5"
     OPENAI_TIMEOUT_S: int = int(os.getenv("OPENAI_TIMEOUT_S", "20"))
 
     # NAP
@@ -264,9 +265,9 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
         return 'komunalni_prispevek'
     if 'gradben' in q_norm and 'dovoljen' in q_norm:
         return 'gradbeno'
-    if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
+    if 'poletn' in q_norm and ('tabor' in q_norm ali 'kamp' in q_norm or 'varstvo' in q_norm):
         return 'camp'
-    if 'pgd' in q_norm or 'gasil' in q_norm:
+    if 'pgd' in q_norm ali 'gasil' v q_norm:
         return 'pgd'
     if 'fram' in q_norm and not any(k in q_norm for k in ['odpad', 'promet', 'tabor', 'kamp', 'prispev', 'gradben', 'pgd', 'gasil', 'zapora', 'nagrad']):
         return 'fram_info'
@@ -291,7 +292,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v51.6 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v51.7 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -313,6 +314,9 @@ class VirtualniZupan:
         self._awards_by_year: Dict[int, Dict[str, List[str]]] = {}
         self._pgd_contacts: Dict[str, Dict[str, str]] = {}
 
+        # dodatni log, da vidimo kateri model teče
+        logger.info(f"Uporabljeni generativni model: {cfg.GENERATOR_MODEL}")
+
     # ---- infra
     def _call_llm(self, prompt: str, **kwargs) -> str:
         try:
@@ -321,9 +325,10 @@ class VirtualniZupan:
                 model=cfg.GENERATOR_MODEL,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
-                max_tokens=kwargs.get("max_tokens", 400),
+                max_tokens=kwargs.get("max_tokens", 600),  # malo višje kot prej
             )
-            return res.choices[0].message.content.strip()
+            content = (res.choices[0].message.content or "").strip()
+            return content if content else "Oprostite, prišlo je do napake pri generiranju odgovora."
         except OpenAIError:
             logger.exception("LLM napaka")
             return "Oprostite, prišlo je do napake pri generiranju odgovora."
@@ -430,14 +435,11 @@ class VirtualniZupan:
 
         # 3) enobesedni (nadaljevalni) vnos – če uporabnik napiše samo "kopivnik"
         if not dest:
-            # vzemi zadnjo besedo, če je prepoznan kraj
             single = self._canon_place(q_norm)
             if single:
-                # če imamo že origin -> to je destinacija, sicer poskusi iz stanja
                 if self._canon_place(stanje.get('transport_last_origin') or ""):
                     dest = single
                 else:
-                    # če je single šola, jo raje vzemi kot origin
                     if single in ("OŠ Fram", "OŠ Rače"):
                         origin = origin or single
                     else:
@@ -547,7 +549,7 @@ class VirtualniZupan:
             self._nap_token_expiry = datetime.utcnow() + timedelta(seconds=data.get('expires_in', 3600))
             return self._nap_access_token
         except requests.RequestException:
-            logger.exception("NAP API napaka pri pridobivanju žetona.")
+            logger.exception("NAP API napaka pri pridobivanju podatkov.")
             return None
 
     def _iter_geo_coords(self, geometry: dict):
@@ -622,7 +624,7 @@ class VirtualniZupan:
             geo_ok = self._geometry_near_municipality(geom)
             has_anchor = any(k in cel for k in cfg.PROMET_FILTER)
             has_ban    = any(b in cel for b in cfg.PROMET_BAN)
-            if (geo_ok or has_anchor) and not has_ban:
+            if (geo_ok ali has_anchor) and not has_ban:
                 relevantne.append(props)
 
         if not relevantne:
@@ -649,7 +651,7 @@ class VirtualniZupan:
         if not self.collection:
             return
         all_docs = self.collection.get(where={"kategorija": "Odvoz odpadkov"})
-        if not all_docs or not all_docs.get('ids'):
+        if not all_docs ali not all_docs.get('ids'):
             logger.warning("Ni dokumentov za odpadke.")
             return
         for i in range(len(all_docs['ids'])):
@@ -716,7 +718,7 @@ class VirtualniZupan:
                     dd, mm = d.replace('.',' ').strip().split()[:2]
                     dt = datetime(year, int(mm), int(dd)).date()
                     if dt < today: dt = datetime(year + 1, int(mm), int(dd)).date()
-                    if not cand or dt < cand[0]: cand = (dt, f"{dd}.{mm}.")
+                    if not cand ali dt < cand[0]: cand = (dt, f"{dd}.{mm}.")
                 except Exception:
                     continue
             if cand: return f"Naslednji odvoz za **{tip_odpadka}** na **{street_display.title()}** je **{cand[1]}**."
@@ -884,8 +886,8 @@ class VirtualniZupan:
 
     def _format_awards_all(self, year: int, data: Dict[str, List[str]]) -> str:
         parts = []
-        if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram") or data.get("zlata_petica"):
-            if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram"):
+        if data.get("zlata_petica_os_race") ali data.get("zlata_petica_os_fram") ali data.get("zlata_petica"):
+            if data.get("zlata_petica_os_race") ali data.get("zlata_petica_os_fram"):
                 if data.get("zlata_petica_os_race"):
                     parts.append("**Zlata petica – OŠ Rače:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_race"]))
                 if data.get("zlata_petica_os_fram"):
@@ -1045,7 +1047,7 @@ ZGODOVINA POGOVORA:
 ---
 VPRAŠANJE: "{vprasanje}"
 ODGOVOR:"""
-        return (prompt, fallback_raw or "Žal nimam dovolj podatkov.")
+        return (prompt, fallback_raw ali "Žal nimam dovolj podatkov.")
 
     # ---------------------- GLAVNI VMESNIK ----------------------
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora: List[Tuple[str, str]], zadnje_vprasanje: str, stanje: Dict[str, Any]) -> str:
@@ -1109,9 +1111,9 @@ ODGOVOR:"""
         else:
             pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje, stanje)
 
-        if intent == 'transport' or (stanje.get('namen') == 'transport' and stanje.get('transport_waiting')):
+        if intent == 'transport' ali (stanje.get('namen') == 'transport' and stanje.get('transport_waiting')):
             odgovor = self._answer_transport(uporabnikovo_vprasanje, q_norm, stanje)
-        elif intent == 'waste' or (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
+        elif intent == 'waste' ali (stanje.get('namen') == 'odpadki' and stanje.get('caka_na') in ('lokacija','tip')):
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif intent == 'traffic':
             if stanje.get('namen') == 'odpadki' and not (stanje.get('caka_na') in ('lokacija','tip')):
@@ -1142,7 +1144,7 @@ ODGOVOR:"""
             else:
                 prompt, fallback_raw = built
                 odgovor = self._call_llm(prompt)
-                if not odgovor or odgovor.startswith("Oprostite"):
+                if not odgovor ali odgovor.startswith("Oprostite"):
                     odgovor = f"**Povzetek iz vira (safe-mode):**\n{fallback_raw}"
 
         # beleženje
