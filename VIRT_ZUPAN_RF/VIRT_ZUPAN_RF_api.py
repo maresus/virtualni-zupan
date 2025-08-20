@@ -1,16 +1,5 @@
-# VIRT_ZUPAN_RF_api.py  — stabilni “backup” + odpadki + NAP + rule-based hiti
-# Verzija 35.0 (RF_api backup)
-# ---------------------------------------------------------------------------
-# Kaj je tu:
-# - Konfiguracija poti (Render / lokalno), .env branje
-# - Povezava na Chroma (obstoječa baza) z OpenAI embedding funkcijo
-# - Odpadki: robustno razbijanje 'naselja', fuzzy & slovenska fleksija, "naslednji"
-# - NAP/promet: ožji filter za občino in okolico, deduplikacija, berljiv izpis
-# - RAG + LLM fallback (gpt-4o-mini) z jasnimi direktivami
-# - Rule-based hiti (direktorica, turizem, e-pošta občine) brez LLM
-# - Varno stanje seje; beleženje v JSONL
-# - CLI: --debug-street, --debug-tip, REPL
-# - Helper: gen_street_keys in (ad-hoc) _street_index za debug
+# VIRT_ZUPAN_RF_api.py — stabilni “backup” + odpadki + NAP + hiti
+# Verzija 36.0 — FIX: Chroma get() brez "ids"; odpadki robustno + "naslednji"
 # ---------------------------------------------------------------------------
 
 import os
@@ -55,7 +44,7 @@ NAP_USERNAME = os.getenv("NAP_USERNAME")
 NAP_PASSWORD = os.getenv("NAP_PASSWORD")
 
 # -----------------------------------------------------------------------------
-# Ključne besede (preklopni trigerji)
+# Trigerji
 # -----------------------------------------------------------------------------
 PROMET_FILTER_KLJUCNIKI = [
     "rače", "race", "fram", "slivnica", "brunšvik", "brunsvik", "podova",
@@ -90,8 +79,7 @@ def fuzzy_match(a: str, b: str, threshold: float = 0.8) -> bool:
     b_n = normalize_text(b)
     if a_n in b_n or b_n in a_n:
         return True
-    ratio = SequenceMatcher(None, a_n, b_n).ratio()
-    return ratio >= threshold
+    return SequenceMatcher(None, a_n, b_n).ratio() >= threshold
 
 def slovenian_variant_equivalent(a: str, b: str) -> bool:
     a_n = normalize_text(a)
@@ -104,6 +92,7 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
     return False
 
 def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.85) -> bool:
+    """Ujemanje fraze (npr. 'bistriska cesta') s tok-om ('bistriska'), z ignoriranjem generičnih besed in fleksijo."""
     generic = {"cesta", "cesti", "ulica", "ulici", "pot", "trg", "ob", "naselje", "naselju"}
     qp = normalize_text(query_phrase)
     st = normalize_text(street_tok)
@@ -126,34 +115,24 @@ def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float =
     return False
 
 def gen_street_keys(street_name: str):
-    """
-    Generira ključne variante za ulico (npr. 'Bistriška cesta' -> ['bistriska','bistriske','bistriski'])
-    """
+    """Ključi iz uličnega imena ('Bistriška cesta' -> ['bistriska','bistriske','bistriski'])."""
     base = normalize_text(street_name).replace("cesta", "").replace("ulica", "").strip()
     if not base:
         return []
-    roots = []
-    for token in base.split():
-        if len(token) >= 3:
-            roots.append(token)
-    if not roots:
-        roots = [base]
+    roots = [t for t in base.split() if len(t) >= 3] or [base]
     variants = set()
     for r in roots:
         variants.add(r)
-        if not r.endswith("a"):
-            variants.add(r + "a")
-        if not r.endswith("i"):
-            variants.add(r + "i")
-        if not r.endswith("e"):
-            variants.add(r + "e")
+        if not r.endswith("a"): variants.add(r + "a")
+        if not r.endswith("i"): variants.add(r + "i")
+        if not r.endswith("e"): variants.add(r + "e")
         if r.endswith("a"):
             variants.add(r[:-1] + "i")
             variants.add(r[:-1] + "e")
     return sorted(list(variants))
 
 # -----------------------------------------------------------------------------
-# Odpadki – kanonične kategorije in varianti
+# Odpadki – kategorije
 # -----------------------------------------------------------------------------
 WASTE_TYPE_VARIANTS = {
     "Biološki odpadki": [
@@ -209,15 +188,15 @@ def get_canonical_waste(text: str):
 
 def extract_locations_from_naselja(naselja_field: str):
     """
-    Robustno razbije 'naselja' metapodatek:
-    - če so ločila (, ; \n) → klasično
-    - če ni ločil → razbije po presledkih, filtrira šum, generične besede, številke
+    Robustno razbije 'naselja':
+    - če so ločila (, ; \n) → delimo po njih
+    - če NI ločil → razbij po presledkih, filtriraj šum (h, št, številke, generične besede)
     Vrne normalizirane tokene/fraze.
     """
     if not naselja_field:
         return []
-    text = naselja_field
-    text = re.sub(r'\(h\.?\s*št\.?.*?\)', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'\(h\.?\s*št\.?.*?\)', '', naselja_field, flags=re.IGNORECASE)
+
     if re.search(r'[;,\n]', text):
         parts = []
         for chunk in re.split(r'[;,\n]+', text):
@@ -231,6 +210,7 @@ def extract_locations_from_naselja(naselja_field: str):
                 seen.add(p)
                 out.append(p)
         return out
+
     toks = [t.strip() for t in text.split() if t.strip()]
     generic = {
         "cesta","cesti","ulica","ulici","pot","trg","naselje","obmocje","območje",
@@ -255,18 +235,36 @@ def extract_locations_from_naselja(naselja_field: str):
     return out
 
 # -----------------------------------------------------------------------------
+# Pomožni: varen Chroma get()
+# -----------------------------------------------------------------------------
+def chroma_get_safe(collection, **kwargs):
+    """
+    Ovije collection.get() in poskrbi, da 'include' NE vsebuje 'ids' (Render Chroma to zavrne).
+    Vrne dict z 'documents' in 'metadatas' (če obstajajo).
+    """
+    include = kwargs.get("include")
+    if include:
+        include = [i for i in include if i in ("documents", "embeddings", "metadatas", "distances", "uris", "data")]
+        kwargs["include"] = include
+    try:
+        return collection.get(**kwargs)
+    except Exception:
+        # failsafe brez include (privzeto vrne vse, kar sme)
+        kwargs.pop("include", None)
+        return collection.get(**kwargs)
+
+# -----------------------------------------------------------------------------
 # Virtualni župan
 # -----------------------------------------------------------------------------
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 35.0 — RF_api backup + odpadki + NAP + hiti)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 36.0 — RF_api backup + odpadki FIX)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.zgodovina_seje = {}
         self._nap_access_token = None
         self._nap_token_expiry = None
-        self._street_index = None  # ad-hoc indeks za debug
-        self._all_docs_cache = None  # za rule-based hite
+        self._all_docs_cache = None
 
     # ---------------- Baza / Chroma ----------------
     def nalozi_bazo(self):
@@ -291,14 +289,13 @@ class VirtualniZupan:
         if self._all_docs_cache is not None:
             return self._all_docs_cache
         try:
-            res = self.collection.get(include=["documents", "metadatas", "ids"], limit=5000)
+            res = chroma_get_safe(self.collection, include=["documents", "metadatas"], limit=5000)
             docs = []
-            if res and res.get("ids"):
-                for i in range(len(res["ids"])):
+            if res and res.get("documents"):
+                for i in range(len(res["documents"])):
                     docs.append({
-                        "id": res["ids"][i],
                         "text": res["documents"][i],
-                        "meta": res["metadatas"][i]
+                        "meta": res["metadatas"][i] if res.get("metadatas") else {}
                     })
             self._all_docs_cache = docs
             return docs
@@ -345,14 +342,14 @@ Zgodovina:
 {zgodovina_str}
 Novo vprašanje: "{zadnje_vprasanje}"
 Samostojno vprašanje:"""
-            response = self.openai_client.chat.completions.create(
+            resp = self.openai_client.chat.completions.create(
                 model=GENERATOR_MODEL_NAME,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=100
             )
-            preoblikovano = (response.choices[0].message.content or "").strip().replace('"', '')
-            return preoblikovano or zadnje_vprasanje
+            out = (resp.choices[0].message.content or "").strip().replace('"', '')
+            return out or zadnje_vprasanje
         except Exception:
             return zadnje_vprasanje
 
@@ -423,35 +420,25 @@ Samostojno vprašanje:"""
             return "Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje. Poskusite kasneje."
 
     # ---------------- Odpadki ----------------
-    def _build_street_index_if_needed(self):
-        if self._street_index is not None:
-            return
-        self._street_index = {}
-        try:
-            all_odp = self.collection.get(where={"kategorija": "Odvoz odpadkov"}, include=["documents","metadatas","ids"], limit=5000)
-            if not all_odp or not all_odp.get("ids"):
-                return
-            for i in range(len(all_odp["ids"])):
-                meta = all_odp["metadatas"][i] or {}
-                locs = extract_locations_from_naselja(meta.get("naselja", "") or "")
-                for loc in locs:
-                    self._street_index.setdefault(loc, []).append(i)
-        except Exception:
-            pass
-
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
         print("-> Kličem specialista za odpadke...")
-        # varno stanje
+        # varna inicializacija seje
         self.zgodovina_seje.setdefault(session_id, {"zgodovina": [], "stanje": {}})
         stanje = self.zgodovina_seje[session_id]["stanje"]
+
         vprasanje_za_iskanje = (stanje.get('izvirno_vprasanje', '') + " " + (uporabnikovo_vprasanje or "")).strip()
         vprasanje_norm = normalize_text(vprasanje_za_iskanje)
 
         if not self.collection:
             return "Baza urnikov ni na voljo."
 
-        vsi_urniki = self.collection.get(where={"kategorija": "Odvoz odpadkov"}, include=["documents","metadatas","ids"], limit=5000)
-        if not vsi_urniki or not vsi_urniki.get('ids'):
+        vsi_urniki = chroma_get_safe(
+            self.collection,
+            where={"kategorija": "Odvoz odpadkov"},
+            include=["documents", "metadatas"],
+            limit=5000
+        )
+        if not vsi_urniki or not vsi_urniki.get('documents'):
             return "V bazi znanja ni podatkov o urnikih."
 
         iskani_tip = get_canonical_waste(vprasanje_norm)
@@ -470,12 +457,14 @@ Samostojno vprašanje:"""
 
         raw_tokens = [t for t in re.split(r'[,\s]+', vprasanje_norm) if t and t not in odstrani]
 
+        # lokacijske fraze (3→2→1)
         location_phrases = []
         for size in (3, 2, 1):
             for i in range(len(raw_tokens) - size + 1):
                 phrase = " ".join(raw_tokens[i:i + size])
                 if phrase:
                     location_phrases.append(phrase)
+        # dedupe ob ohranitvi reda
         seen_set = set()
         filtered_phrases = []
         for p in location_phrases:
@@ -489,7 +478,6 @@ Samostojno vprašanje:"""
         is_explicit_location = (any(len(p.split()) > 1 for p in location_phrases) or
                                 any(ind in vprasanje_norm for ind in street_indicators))
 
-        # notranja util
         def extract_datumi(doc_text: str):
             ds = []
             for m in re.findall(r'(\d{1,2})\.(\d{1,2})\.', doc_text):
@@ -508,9 +496,12 @@ Samostojno vprašanje:"""
 
         exact_street_matches, fuzzy_street_matches, area_matches = [], [], []
 
-        for i in range(len(vsi_urniki['ids'])):
-            meta = vsi_urniki['metadatas'][i] or {}
-            doc_text = vsi_urniki['documents'][i] or ""
+        docs = vsi_urniki['documents']
+        metas = vsi_urniki.get('metadatas') or [{}] * len(docs)
+
+        for i in range(len(docs)):
+            meta = metas[i] or {}
+            doc_text = docs[i] or ""
 
             meta_tip_raw = meta.get('tip_odpadka', '') or ''
             meta_tip_canon = get_canonical_waste(meta_tip_raw) or normalize_text(meta_tip_raw)
@@ -576,7 +567,7 @@ Samostojno vprašanje:"""
                 return "Kateri tip odpadka te zanima? (bio, mešani komunalni, embalaža, papir, steklo)"
             return "Za navedeno kombinacijo tipa in lokacije žal nimam urnika."
 
-        # 'naslednji'
+        # “naslednji”
         if contains_naslednji:
             today = datetime.now().date()
             best_dt, best_tip, best_loc = None, None, None
@@ -598,7 +589,7 @@ Samostojno vprašanje:"""
                 return f"Naslednji odvoz za **{best_tip}** na **{(best_loc or '').title()}** je **{best_dt.strftime('%d.%m.%Y')}**."
             return "Za iskani tip in lokacijo v dokumentu ni prihodnjih terminov."
 
-        # sicer: vrni prvo dobro ujemanje
+        # sicer: prikaži prvo dobro ujemanje
         c = kandidati[0]
         tip = c['meta'].get('tip_odpadka', c.get('tip_canon', ''))
         loc = (c.get('matched_street') or c.get('matched_area') or c['meta'].get('obmocje', '')).title()
@@ -608,78 +599,58 @@ Samostojno vprašanje:"""
             for m in re.findall(r'(\d{1,2})\.(\d{1,2})\.', c['doc']):
                 try:
                     d, mo = int(m[0]), int(m[1])
-                    entry = f"{d}.{mo}."
-                    if entry not in datumi:
-                        datumi.append(entry)
+                    s = f"{d}.{mo}."
+                    if s not in datumi:
+                        datumi.append(s)
                 except Exception:
                     continue
         datumi_str = ", ".join(datumi) if datumi else "ni zabeleženih terminov"
         return f"Odvoz – {loc}: **{tip}**. Termini: {datumi_str}"
 
-    # ---------------- Rule-based hiti (pred LLM) ----------------
+    # ---------------- Rule-based hiti ----------------
     def _hit_rule_based(self, vprasanje_norm: str):
-        """
-        Hitri odgovori iz baze brez LLM, če najdemo jasne vzorce.
-        """
         docs = self._get_all_docs_cached()
         if not docs:
             return None
 
-        # Direktor(ica) občinske uprave
+        # Direktor(ica) OU
         if ("direktor" in vprasanje_norm and "obcins" in vprasanje_norm) or \
            ("direktorica" in vprasanje_norm and "obcins" in vprasanje_norm):
-            ime = None
-            tel = None
-            mail = None
+            ime, tel, mail = None, None, None
             for d in docs:
-                t = d["text"]
-                n = normalize_text(t)
+                t = d["text"]; n = normalize_text(t)
                 if "direktorica obcinske uprave" in n or "direktor obcinske uprave" in n or "karmen kotnik" in n:
-                    # ime
                     if "karmen kotnik" in n:
                         ime = "mag. Karmen Kotnik"
-                    # email
                     m = re.search(r'[\w\.-]+@race-fram\.si', t, re.IGNORECASE)
-                    if m:
-                        mail = m.group(0)
-                    # telefon (prefer 02 609 60 xx ali mobilna)
-                    m2 = re.search(r'\b0[1-9]\s?\d{2}\s?\d{2}\s?\d{2}\b|\b02\s?609\s?60\s?\d{2}\b', t)
-                    if m2:
-                        tel = m2.group(0)
-            if ime or mail or tel:
-                parts = ["**Direktorica občinske uprave** je **mag. Karmen Kotnik**."]
-                if tel:
-                    parts.append(f"**Telefon:** {tel}")
-                if mail:
-                    parts.append(f"**E-pošta:** {mail}")
+                    if m: mail = m.group(0)
+                    m2 = re.search(r'\b02\s?609\s?60\s?\d{2}\b', t)
+                    if m2: tel = m2.group(0)
+            if ime or tel or mail:
+                parts = [f"**Direktorica občinske uprave** je **{ime or 'mag. Karmen Kotnik'}**."]
+                if tel:  parts.append(f"**Telefon:** {tel}")
+                if mail: parts.append(f"**E-pošta:** {mail}")
                 return " ".join(parts)
 
         # Turizem
         if "turizem" in vprasanje_norm or "turistic" in vprasanje_norm:
-            oseba = None
-            mail = None
-            tel = None
-            # prioritetno Tanja Kosi
+            oseba, mail, tel = None, None, None
             for d in docs:
                 t = d["text"]; n = normalize_text(t)
                 if "tanja kosi" in n and ("turizem" in n or "turistic" in n):
                     oseba = "Tanja Kosi (višja svetovalka za okolje, kmetijstvo, turizem in CZ)"
                     m = re.search(r'[\w\.-]+@race-fram\.si', t, re.IGNORECASE)
-                    if m:
-                        mail = m.group(0)
+                    if m: mail = m.group(0)
                     m2 = re.search(r'\b02\s?609\s?60\s?\d{2}\b', t)
-                    if m2:
-                        tel = m2.group(0)
+                    if m2: tel = m2.group(0)
                     break
             if oseba or mail or tel:
                 out = [f"Za področje **turizma** je zadolžena **{oseba or 'Tanja Kosi'}**."]
-                if mail:
-                    out.append(f"**E-pošta:** {mail}")
-                if tel:
-                    out.append(f"**Telefon:** {tel}")
+                if mail: out.append(f"**E-pošta:** {mail}")
+                if tel:  out.append(f"**Telefon:** {tel}")
                 return " ".join(out)
 
-        # E-poštni naslov občine
+        # E-pošta občine
         if ("e-post" in vprasanje_norm or "email" in vprasanje_norm or "e mail" in vprasanje_norm) and \
            ("obcine" in vprasanje_norm or "obcina" in vprasanje_norm):
             maili = set()
@@ -694,22 +665,18 @@ Samostojno vprašanje:"""
         # EV polnilnice
         if ("polnilnic" in vprasanje_norm or "polnilnice" in vprasanje_norm or "ev" in vprasanje_norm) and \
            ("obcin" in vprasanje_norm or "race" in vprasanje_norm or "fram" in vprasanje_norm):
-            lok = None
-            cena = None
+            lok, cena = None, None
             for d in docs:
                 n = normalize_text(d["text"])
                 if "polnilnic" in n or "polnilnice" in n:
                     if ("grad race" in n or "dtv partizan fram" in n) and not lok:
                         lok = "Grad Rače in DTV Partizan Fram"
-                    m = re.search(r'0,?25\s?eur/kwh|\b0\.25\s?eur/kwh\b', d["text"], re.IGNORECASE)
-                    if m:
-                        cena = "0,25 EUR/kWh (+ štartnina 0,50 EUR; rezervacija 1,00 EUR)"
+                    m = re.search(r'0[,\.]?25\s?eur/kwh', d["text"], re.IGNORECASE)
+                    if m: cena = "0,25 EUR/kWh (+ štartnina 0,50 EUR; rezervacija 1,00 EUR)"
             if lok or cena:
                 parts = ["**Električne polnilnice** v občini:"]
-                if lok:
-                    parts.append(f"- Lokacije: {lok}")
-                if cena:
-                    parts.append(f"- Cene: {cena}")
+                if lok:  parts.append(f"- Lokacije: {lok}")
+                if cena: parts.append(f"- Cene: {cena}")
                 return "\n".join(parts)
 
         return None
@@ -720,7 +687,6 @@ Samostojno vprašanje:"""
         if not self.collection:
             return "Oprostite, moja baza znanja trenutno ni na voljo."
 
-        # varna inicializacija seje
         self.zgodovina_seje.setdefault(session_id, {'zgodovina': [], 'stanje': {}})
         stanje = self.zgodovina_seje[session_id]['stanje']
         zgodovina = self.zgodovina_seje[session_id]['zgodovina']
@@ -736,7 +702,7 @@ Samostojno vprašanje:"""
         elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_PROMET):
             odgovor = self.preveri_zapore_cest()
 
-        # 3) Rule-based hiti (direktorica, turizem, e-pošta občine, polnilnice…)
+        # 3) Rule-based hiti
         else:
             rb = self._hit_rule_based(vprasanje_lower)
             if rb:
@@ -775,12 +741,12 @@ Samostojno vprašanje:"""
                         "ODGOVOR:"
                     )
                     try:
-                        response = self.openai_client.chat.completions.create(
+                        resp = self.openai_client.chat.completions.create(
                             model=GENERATOR_MODEL_NAME,
                             messages=[{"role": "user", "content": prompt_za_llm}],
                             temperature=0.0
                         )
-                        odgovor = response.choices[0].message.content
+                        odgovor = resp.choices[0].message.content
                     except Exception:
                         odgovor = "Žal odgovora trenutno ne morem sestaviti."
 
