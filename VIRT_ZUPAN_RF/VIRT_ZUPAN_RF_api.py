@@ -1,4 +1,4 @@
-# VIRT_ZUPAN_RF_api.py  (v54.0)
+# VIRT_ZUPAN_RF_api.py  (v55.1)
 
 import os
 import sys
@@ -81,6 +81,12 @@ class Config:
 
     GENERIC_STREET_WORDS: Tuple[str, ...] = ("cesta", "ceste", "cesti", "ulica", "ulice", "ulici", "pot", "trg", "naselje", "območje", "obmocje")
     GENERIC_PREPS: Tuple[str, ...] = ("na", "v", "za", "ob", "pod", "pri", "nad", "do", "od", "k", "proti")
+
+    # Naselja/uporabni kraji za kombinacije ulica + naselje
+    AREA_WORDS: Tuple[str, ...] = (
+        "fram","race","rače","podova","slivnica","brunšvik","brunsvik","pozeg","požeg","morje",
+        "spodnja gorica","zgornja gorica","gorica","jesenca","jesenec"
+    )
 
     RAG_TOPK: int = int(os.getenv("RAG_TOPK", "8"))
     WASTE_FUZZ: float = float(os.getenv("WASTE_FUZZ", "0.86"))
@@ -167,11 +173,11 @@ def gen_street_keys(name: str) -> List[str]:
     if base.endswith("ski"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ske")
     if base.endswith("ske"): keys.add(base[:-3] + "ska"); keys.add(base[:-3] + "ski")
     # -a/-e/-i
-    if base.endswith("a"): 
+    if base.endswith("a"):
         keys.add(base[:-1] + "i"); keys.add(base[:-1] + "e")
-    if base.endswith("i"): 
+    if base.endswith("i"):
         keys.add(base[:-1] + "a"); keys.add(base[:-1] + "e")
-    if base.endswith("e"): 
+    if base.endswith("e"):
         keys.add(base[:-1] + "a"); keys.add(base[:-1] + "i")
     return [k for k in keys if k]
 
@@ -202,19 +208,69 @@ def get_canonical_waste(text: str) -> Optional[str]:
     return None
 
 def extract_locations_from_naselja(field: str) -> List[str]:
-    parts = set()
+    """
+    Razbije polje 'naselja' v več uporabnih variant: polno ime, brez generičnih besed,
+    samostojni prvi token, kombinacije ulica + naselje.
+    """
+    parts: Set[str] = set()
     if not field:
         return []
     clean = re.sub(r'\(h\. *št\..*?\)', '', field, flags=re.IGNORECASE)
-    for seg in re.split(r'[;,\n]+', clean):
-        seg = seg.strip()
-        if not seg:
+
+    # razbij po ; in novih vrsticah (vejice pustimo za sestavo "ulica, naselje")
+    raw_chunks = re.split(r'[;|\n]+', clean)
+
+    for chunk in raw_chunks:
+        chunk = chunk.strip()
+        if not chunk:
             continue
-        n = normalize_text(seg)
-        if n:
-            n = n.replace("bistriška", "bistriska")
-            parts.add(n)
+
+        norm_full = normalize_text(chunk).replace("bistriška", "bistriska")
+        if not norm_full:
+            continue
+
+        # osnovno
+        parts.add(norm_full)
+
+        # brez generičnih besed
+        stripped = strip_generics(norm_full)
+        if stripped:
+            parts.add(stripped)
+
+        # prvi vsebinski token (npr. "bistriska")
+        if stripped:
+            ft = stripped.split()[0]
+            if len(ft) >= 4:
+                parts.add(ft)
+
+        # kombinacije ulica + naselje, če zadnja beseda spominja na naselje
+        area_tokens = set(cfg.AREA_WORDS)
+        stoks = stripped.split() if stripped else []
+        if stoks:
+            if stoks[-1] in area_tokens and len(stoks) >= 2:
+                parts.add(stoks[0])  # ulica sama
+                parts.add(f"{stoks[0]} {stoks[-1]}")  # ulica + naselje
+
     return list(parts)
+
+def _expand_street_variants(s_norm: str) -> Set[str]:
+    """
+    Iz ene 'lokacije' zgradi bogat nabor ključev, da pokrijemo sklanjatve in kombinacije.
+    """
+    out: Set[str] = set()
+    base = strip_generics(s_norm)
+    if not base:
+        return out
+
+    for k in gen_street_keys(base):
+        out.add(k)
+
+    toks = base.split()
+    if len(toks) >= 2:
+        out.add(toks[0])  # samo ulica
+        out.add(f"{toks[0]} {toks[-1]}")  # ulica + naselje
+
+    return {k for k in out if k}
 
 def tokens_from_text(s: str) -> set:
     return {t for t in re.split(r'[^a-z0-9]+', normalize_text(s)) if len(t) > 2}
@@ -253,23 +309,23 @@ def _looks_like_transport_followup(q_norm: str) -> bool:
     )
 
 def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
-    # 0) kontakt in EV polnilnice – najvišja prioriteta pred vsem
+    # kontakt in EV polnilnice – najvišja prioriteta
     if any(k in q_norm for k in ['kontakt','kontaktna','stevilka','številka','telefon','e mail','email','mail','naslov','pisarna']):
         return 'contact'
     if re.search(r'\bpolnilnic\w*|\belektri\w*\s+polniln\w*|\bev\s*polniln\w*', q_norm):
         return 'ev_charging'
 
-    # 1) odpadki – PREJ kot promet (da "cesti/ulici" ne preglasijo odvoza)
+    # odpadki – pred prometom
     if any(k in q_norm for k in cfg.KLJUCNE_ODPADKI) or get_canonical_waste(q_norm) or ('naslednji' in q_norm):
         return 'waste'
     if last_intent == 'waste' and (re.match(r'^\s*(kaj pa|pa)\b', q_norm) or re.search(r'\b(od|iz|v|na)\b', q_norm)):
         return 'waste'
 
-    # 2) zapora vloga
+    # zapora vloga
     if re.search(r'\bzapor\w*', q_norm) and re.search(r'\bvlog\w*|\bobrazec\w*', q_norm):
         return "zapora_vloga"
 
-    # 3) nagrade, župan
+    # nagrade, župan
     if (re.search(r'\b(zlat\w*\s+peti\w*|petic\w*|peti\b)', q_norm) or
         re.search(r'\bzupanov\w*\s+nagrad\w*', q_norm) or
         re.search(r'\bzupanov\w*\s+priznanj\w*', q_norm) or
@@ -280,18 +336,18 @@ def detect_intent_qna(q_norm: str, last_intent: Optional[str] = None) -> str:
     if re.search(r'\bkdo je\b', q_norm) and re.search(r'\bzupan\b', q_norm):
         return 'who_is_mayor'
 
-    # 4) PROMET (ceste, dela)
+    # PROMET
     if any(k in q_norm for k in cfg.KLJUCNE_PROMET):
         return 'traffic'
 
-    # 5) transport
+    # transport
     has_transport_hint = any(k in q_norm for k in cfg.TRANSPORT_HINTS)
     if has_transport_hint or re.search(r'\bod\s+(os\s*fram|os\s*rac?e|kopivnik|morje|slivnic\w*|brun[sš]?vik|fram|rac?e)\s+(do|v|na)\s+', q_norm):
         return 'transport'
     if last_intent == 'transport' and _looks_like_transport_followup(q_norm):
         return 'transport'
 
-    # 6) drugo
+    # ostalo
     if 'gradben' in q_norm and 'dovoljen' in q_norm:
         return 'gradbeno'
     if 'poletn' in q_norm and ('tabor' in q_norm or 'kamp' in q_norm or 'varstvo' in q_norm):
@@ -319,7 +375,7 @@ def map_award_alias(q_norm: str) -> str:
 class VirtualniZupan:
     def __init__(self) -> None:
         prefix = "PRODUCTION" if cfg.ENV_TYPE == 'production' else "DEVELOPMENT"
-        logger.info(f"[{prefix}] VirtualniŽupan v54.0 inicializiran.")
+        logger.info(f"[{prefix}] VirtualniŽupan v55.1 inicializiran.")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection: Optional[chromadb.Collection] = None
         self.zgodovina_seje: Dict[str, Dict[str, Any]] = {}
@@ -447,13 +503,13 @@ class VirtualniZupan:
         origin, dest, time_hint = self._extract_route(q_norm, stanje)
         if not origin and not dest:
             stanje['namen'] = 'transport'; stanje['transport_waiting'] = 'route'
-            return "Katera relacija te zanima? (npr. 'od OŠ Fram do Kopivnika')"
+            return "Katera relacija te zanima? na primer: od OŠ Fram do Kopivnika"
         if origin and not dest:
             stanje['namen'] = 'transport'; stanje['transport_last_origin'] = origin; stanje['transport_waiting'] = 'dest'
-            return "Kam pa želiš (npr. 'v Kopivnik', 'v Morje')?"
+            return "Kam želiš? na primer: v Kopivnik ali v Morje"
         if dest and not origin:
             stanje['namen'] = 'transport'; stanje['transport_last_dest'] = dest; stanje['transport_waiting'] = 'origin'
-            return "Iz kje pa? (npr. 'iz OŠ Fram', 'iz OŠ Rače')"
+            return "Iz kje? na primer: iz OŠ Fram ali iz OŠ Rače"
 
         stanje['transport_last_origin'] = origin
         stanje['transport_last_dest']   = dest
@@ -464,11 +520,13 @@ class VirtualniZupan:
             return (normalize_text(a) == normalize_text(A) and normalize_text(b) == normalize_text(B))
 
         if (is_pair(origin, dest, "OŠ Fram", "Kopivnik") or is_pair(origin, dest, "Kopivnik", "OŠ Fram")):
-            out_lines = [f"**Prevoz {origin} → {dest}:**"]
-            if not time_hint or time_hint == "zjutraj":   out_lines.append("- **Zjutraj:** 7.25")
-            if not time_hint or time_hint == "popoldne":  out_lines.append("- **Popoldne:** 14.40")
-            out_lines.append(f"**{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
-            return "\n".join(out_lines)
+            out = f"Prevoz {origin} → {dest}\n"
+            if not time_hint or time_hint == "zjutraj":
+                out += "Zjutraj: 7.25\n"
+            if not time_hint or time_hint == "popoldne":
+                out += "Popoldne: 14.40\n"
+            out += f"{cfg.TRANSPORT_CONTACT_TEXT}: {cfg.TRANSPORT_CONTACT_URL}"
+            return out.strip()
 
         # fallback: poskus iz baze
         if self.collection:
@@ -492,19 +550,19 @@ class VirtualniZupan:
                 if uniq:
                     morn = [t for t in uniq if int(t.split('.')[0]) < 12]
                     aft  = [t for t in uniq if int(t.split('.')[0]) >= 12]
-                    out_lines = [f"**Prevoz {origin} → {dest}:**"]
+                    out = f"Prevoz {origin} → {dest}\n"
                     if time_hint == "zjutraj":
-                        if morn: out_lines.append("- **Zjutraj:** " + ", ".join(morn))
+                        if morn: out += "Zjutraj: " + ", ".join(morn) + "\n"
                     elif time_hint == "popoldne":
-                        if aft: out_lines.append("- **Popoldne:** " + ", ".join(aft))
+                        if aft: out += "Popoldne: " + ", ".join(aft) + "\n"
                     else:
-                        if morn: out_lines.append("- **Zjutraj:** " + ", ".join(morn))
-                        if aft: out_lines.append("- **Popoldne:** " + ", ".join(aft))
-                    out_lines.append(f"**{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
-                    return "\n".join(out_lines)
+                        if morn: out += "Zjutraj: " + ", ".join(morn) + "\n"
+                        if aft: out += "Popoldne: " + ", ".join(aft) + "\n"
+                    out += f"{cfg.TRANSPORT_CONTACT_TEXT}: {cfg.TRANSPORT_CONTACT_URL}"
+                    return out.strip()
 
-        return (f"Za relacijo **{origin} → {dest}** nimam točnih ur. "
-                f"Preveri pri organizatorju. **{cfg.TRANSPORT_CONTACT_TEXT}:** {cfg.TRANSPORT_CONTACT_URL}")
+        return (f"Za relacijo {origin} → {dest} nimam točnih ur. "
+                f"Preveri pri organizatorju. {cfg.TRANSPORT_CONTACT_TEXT}: {cfg.TRANSPORT_CONTACT_URL}")
 
     # ---------------------- NAP / PROMET ----------------------
     def _ensure_nap_token(self) -> Optional[str]:
@@ -584,6 +642,7 @@ class VirtualniZupan:
             except requests.RequestException:
                 logger.exception("NAP API napaka pri pridobivanju podatkov o prometu.")
                 return "Žal mi neposreden vpogled v stanje na cestah trenutno ne deluje."
+
         relevantne = []
         for d in vsi_dogodki:
             props = d.get("properties", {}) or {}
@@ -594,20 +653,22 @@ class VirtualniZupan:
             has_ban    = any(b in cel for b in cfg.PROMET_BAN)
             if (geo_ok or has_anchor) and not has_ban:
                 relevantne.append(props)
+
         if not relevantne:
-            return ("Po podatkih portala promet.si na območju občine Rače-Fram "
-                    "trenutno ni zabeleženih del na cesti, zapor ali zastojev.")
+            return ("Po podatkih portala promet.si na območju občine Rače-Fram trenutno ni zabeleženih del na cesti, zapor ali zastojev.")
+
         seen = set(); unique = []
         for z in relevantne:
             key = (str(z.get("cesta","")).strip(), str(z.get("opis","")).strip())
             if key in seen: continue
             seen.add(key); unique.append(z)
+
         ts = datetime.now().strftime("%d.%m.%Y %H:%M")
-        porocilo = f"**Stanje na cestah (vir: NAP/promet.si, {ts})**\n\n"
+        porocilo = f"Stanje na cestah (vir: NAP/promet.si, {ts})\n\n"
         for z in unique:
             cesta = z.get("cesta") or "Ni podatka"
             opis  = z.get("opis")  or "Ni podatka"
-            porocilo += f"- **Cesta:** {cesta}\n  **Opis:** {opis}\n\n"
+            porocilo += f"Cesta: {cesta}\nOpis: {opis}\n\n"
         return porocilo.strip()
 
     # ---------------------- ODPADKI ----------------------
@@ -618,28 +679,50 @@ class VirtualniZupan:
         if not all_docs or not all_docs.get('ids'):
             logger.warning("Ni dokumentov za odpadke.")
             return
+
+        self._street_index.clear()
+        self._area_type_docs.clear()
+
         for i in range(len(all_docs['ids'])):
             meta = all_docs['metadatas'][i]
             doc_text = all_docs['documents'][i]
+
             tip_meta = meta.get('tip_odpadka', '') or ''
             tip = get_canonical_waste(tip_meta) or tip_meta
+
             area = normalize_text(meta.get('obmocje', '') or '')
             self._area_type_docs[(area, tip)] = doc_text
+
             streets = extract_locations_from_naselja(meta.get('naselja', '') or '')
             for s_norm in streets:
                 display = s_norm
-                for key in gen_street_keys(s_norm):
+                for key in _expand_street_variants(s_norm):
                     self._street_index.setdefault(key, []).append({
                         "area": area, "tip": tip, "doc": doc_text, "display": display
                     })
+
         self._street_keys_list = list(self._street_index.keys())
         logger.info(f"Indeks: {len(self._street_keys_list)} uličnih ključev, {len(self._area_type_docs)} (območje,tip).")
 
     def _best_street_key_for_query(self, phrases: List[str]) -> Optional[str]:
+        # 1) točno ujemanje prek gen_street_keys
         for ph in phrases:
             for key in gen_street_keys(ph):
                 if key in self._street_index:
                     return key
+
+        # 2) “vsebuje” – če je baza imela “bistriska fram”, query pa “bistriski”
+        for ph in phrases:
+            base = strip_generics(ph)
+            if len(base) < 4:
+                continue
+            needle = f" {base} "
+            for key in self._street_keys_list:
+                hay = f" {key} "
+                if needle in hay:
+                    return key
+
+        # 3) fuzzy fallback
         best = (None, 0.0)
         for ph in phrases:
             base = strip_generics(ph)
@@ -691,18 +774,15 @@ class VirtualniZupan:
         except Exception:
             next_date_fmt = None
 
-        # strukturiran prikaz
-        header = f"**Odvoz odpadkov – {street_display.title()}**"
-        body = [
-            f"- **Tip**: {tip_odpadka}",
-        ]
-        if next_date_fmt:
-            body.append(f"- **Naslednji odvoz**: {next_date_fmt}")
-        body.append(f"- **Vsi termini**: {', '.join(dates)}")
-        out = header + "\n" + "\n".join(body)
-
         if only_next and next_date_fmt:
-            return f"**Naslednji odvoz – {street_display.title()}**\n- **{tip_odpadka}**: {next_date_fmt}"
+            return f"Naslednji odvoz – {street_display.title()}\n{tip_odpadka}: {next_date_fmt}"
+
+        out = (
+            f"Odvoz odpadkov – {street_display.title()}\n"
+            f"Tip: {tip_odpadka}\n"
+            f"{'Naslednji odvoz: ' + next_date_fmt + '\n' if next_date_fmt else ''}"
+            f"Vsi termini: {', '.join(dates)}"
+        )
         return out
 
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
@@ -722,7 +802,7 @@ class VirtualniZupan:
             phrases = [stanje['zadnja_lokacija_norm']]
         if not phrases:
             stanje['namen'] = 'odpadki'; stanje['caka_na'] = 'lokacija'
-            return "Za katero ulico te zanima urnik? (npr. 'Bistriška cesta, Fram')"
+            return "Za katero ulico te zanima urnik? na primer: Bistriška cesta, Fram"
 
         key = self._best_street_key_for_query(phrases)
         if not key:
@@ -744,7 +824,7 @@ class VirtualniZupan:
             if not wanted_tip:
                 stanje['zadnja_lokacija_norm'] = phrases[0]
                 stanje['namen'] = 'odpadki'; stanje['caka_na'] = 'tip'
-                return "Kateri tip odpadkov te zanima? (bio, mešani, embalaža, papir, steklo)"
+                return "Kateri tip odpadkov te zanima? izberi: bio, mešani, embalaža, papir, steklo"
             return "Za navedeno ulico ali območje žal nisem našel urnika za izbrani tip."
 
         entries = self._street_index.get(key, [])
@@ -877,18 +957,18 @@ class VirtualniZupan:
         if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram") or data.get("zlata_petica"):
             if data.get("zlata_petica_os_race") or data.get("zlata_petica_os_fram"):
                 if data.get("zlata_petica_os_race"):
-                    parts.append("**Zlata petica – OŠ Rače:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_race"]))
+                    parts.append("Zlata petica – OŠ Rače:\n" + "\n".join(data["zlata_petica_os_race"]))
                 if data.get("zlata_petica_os_fram"):
-                    parts.append("**Zlata petica – OŠ Fram:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica_os_fram"]))
+                    parts.append("Zlata petica – OŠ Fram:\n" + "\n".join(data["zlata_petica_os_fram"]))
             else:
-                parts.append("**Zlata petica:**\n" + "\n".join(f"- {n}" for n in data["zlata_petica"]))
+                parts.append("Zlata petica:\n" + "\n".join(data["zlata_petica"]))
         if data.get("priznanje_zupana"):
-            parts.append("**Priznanje župana:**\n" + "\n".join(f"- {n}" for n in data["priznanje_zupana"]))
+            parts.append("Priznanje župana:\n" + "\n".join(data["priznanje_zupana"]))
         if data.get("spominska_plaketa"):
-            parts.append("**Spominska plaketa:**\n" + "\n".join(f"- {n}" for n in data["spominska_plaketa"]))
+            parts.append("Spominska plaketa:\n" + "\n".join(data["spominska_plaketa"]))
         if data.get("posthumno_castni_obcan"):
-            parts.append("**Posthumno častni občan:**\n" + "\n".join(f"- {n}" for n in data["posthumno_castni_obcan"]))
-        return f"**Nagrade in priznanja {year}:**\n" + "\n\n".join(parts) if parts else "Žal nimam podatkov za to leto."
+            parts.append("Posthumno častni občan:\n" + "\n".join(data["posthumno_castni_obcan"]))
+        return f"Nagrade in priznanja {year}:\n" + "\n\n".join(parts) if parts else "Žal nimam podatkov za to leto."
 
     def _answer_awards(self, q_norm: str) -> Optional[str]:
         years = [int(y) for y in re.findall(r'\b(19\d{2}|20\d{2})\b', q_norm)]
@@ -902,16 +982,16 @@ class VirtualniZupan:
             os_r = data.get("zlata_petica_os_race", [])
             os_f = data.get("zlata_petica_os_fram", [])
             if os_r or os_f:
-                out = [f"**Zlata petica {year}:**"]
-                if os_r: out.append("**OŠ Rače:**\n" + "\n".join(f"- {n}" for n in os_r))
-                if os_f: out.append("**OŠ Fram:**\n" + "\n".join(f"- {n}" for n in os_f))
-                return "\n".join(out)
+                out = [f"Zlata petica {year}:"]
+                if os_r: out.append("OŠ Rače:\n" + "\n".join(os_r))
+                if os_f: out.append("OŠ Fram:\n" + "\n".join(os_f))
+                return "\n\n".join(out)
             zp = data.get("zlata_petica", [])
-            if zp: return f"**Zlata petica {year}:**\n" + "\n".join(f"- {n}" for n in zp)
+            if zp: return f"Zlata petica {year}:\n" + "\n".join(zp)
             return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
         if cat == "priznanje_zupana":
             pz = data.get("priznanje_zupana", [])
-            if pz: return f"**Priznanje župana {year}:**\n" + "\n".join(f"- {n}" for n in pz)
+            if pz: return f"Priznanje župana {year}:\n" + "\n".join(pz)
             return "Žal iz baze ne uspem zanesljivo izluščiti nagrajencev za to vprašanje."
         return self._format_awards_all(year, data)
 
@@ -961,11 +1041,11 @@ class VirtualniZupan:
         for n in order:
             key = n.lower()
             info = self._pgd_contacts.get(key, {"ime": n})
-            line = f"- **{info.get('ime', n)}**"
+            line = f"{info.get('ime', n)}"
             if info.get("telefon"): line += f" — tel.: {info['telefon']}"
             if info.get("email"):   line += f" — e-pošta: {info['email']}"
             lines.append(line)
-        return "**Gasilska društva v občini Rače-Fram:**\n" + "\n".join(lines)
+        return "Gasilska društva v občini Rače-Fram:\n" + "\n".join(lines)
 
     # ---------------------- RAG PROMPT BUILDER ----------------------
     def _strip_past_year_lines(self, text: str, this_year: int) -> str:
@@ -1022,11 +1102,10 @@ class VirtualniZupan:
         if not context: return None
         now = datetime.now()
         zgodovina_str = "\n".join([f"U: {q}\nA: {a}" for q, a in zgodovina])
-        prompt = f"""Ti si 'Virtualni župan občine Rače-Fram'.
-DIREKTIVA #1 (DATUMI): Današnji datum je {now.strftime('%d.%m.%Y')}. Ne navajaj informacij iz preteklih let, razen če je vprašanje zgodovinsko.
-DIREKTIVA #2 (OBLIKA): Odgovor naj bo kratek in pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.
-DIREKTIVA #3 (POVEZAVE): Če v kontekstu POVEZAVA ni URL, **ne izmišljuj** povezave in je ne dodajaj.
-DIREKTIVA #4 (SPECIFIČNOST): Če specifičnega podatka ni, povej 'Žal nimam natančnega podatka.' – brez balasta.
+        prompt = f"""Ti si Virtualni župan občine Rače-Fram.
+DATUM: {now.strftime('%d.%m.%Y')}
+OBLIKA ODGOVORA: brez alinej, kratko, jasno, z označenimi vrsticami (npr. Naslov:, Povzetek:, Povezava:). Ne izmišljaj povezav; če ni URL, vrstico Povezava izpusti.
+SPECIFIČNOST: če specifičnega podatka ni, napiši: Žal nimam natančnega podatka.
 
 --- KONTEKST ---
 {context}
@@ -1046,19 +1125,22 @@ ODGOVOR:"""
 
     def _answer_contacts(self, q_norm: str) -> str:
         if "karmen" in q_norm and "kotnik" in q_norm:
-            return ("**Direktorica občinske uprave – mag. Karmen Kotnik**\n"
-                    "Za stik uporabi **tajništvo Občine Rače-Fram: 02 609 60 10** (preusmerijo naprej).")
+            return ("Direktorica občinske uprave: mag. Karmen Kotnik\n"
+                    "Za stik uporabi tajništvo Občine Rače-Fram: 02 609 60 10 (preusmerijo naprej).")
         if re.search(r'\bnk\b|\bnogometn\w+\s+klub\b', q_norm) and "fram" in q_norm:
             found = self._find_contact_in_collection(["NK Fram","Nogometni klub Fram","Fram"])
             if found:
-                return f"**Kontakt NK Fram:** {found}"
-            return "Za **NK Fram** nimam točnega kontakta. Pokliči občino (**02 609 60 10**) ali preveri FB/stran kluba."
+                return f"Kontakt NK Fram: {found}"
+            return "Za NK Fram nimam točnega kontakta. Pokliči občino (02 609 60 10) ali preveri splet/FB kluba."
         if re.search(r'\bos\s*fram\b', q_norm):
-            return ("**Kontakt OŠ Fram**\n- Telefon: 02 603 56 00\n- Splet: osfram.si\n"
-                    f"- Prevozi: {cfg.TRANSPORT_CONTACT_URL}")
+            return ("Kontakt OŠ Fram\n"
+                    "Telefon: 02 603 56 00\n"
+                    f"Splet: osfram.si\nPrevozi: {cfg.TRANSPORT_CONTACT_URL}")
         if re.search(r'\bos\s*rac?e\b', q_norm):
-            return ("**Kontakt OŠ Rače**\n- Telefon: 02 609 71 00\n- Splet: os-race.si")
-        return "**Kontakt občine:** " + cfg.FALLBACK_CONTACT
+            return ("Kontakt OŠ Rače\n"
+                    "Telefon: 02 609 71 00\n"
+                    "Splet: os-race.si")
+        return "Kontakt občine: " + cfg.FALLBACK_CONTACT
 
     def _find_contact_in_collection(self, query_terms: List[str]) -> Optional[str]:
         if not self.collection: return None
@@ -1083,25 +1165,22 @@ ODGOVOR:"""
         return best or None
 
     def _answer_komunalni(self, q_norm: str) -> str:
-        parts = [
-            "**Komunalni prispevek – osnove:**",
-            "- **Kaj**: plačilo dela stroškov komunalne opreme.",
-            "- **Kdo**: investitor/lastnik pri novogradnji ali spremembi namembnosti.",
-            "- **Kdaj**: pred izdajo gradbenega dovoljenja.",
-            "- **Kje**: vloga na občino (možen **informativni izračun**).",
-            "",
-            "**Informativni izračun (koraki):**",
-            "1) Podatki o parceli/objektu (namembnost, BTP, priključki).",
-            "2) Izsek prostorskega akta ali lokacijska informacija.",
-            "3) Pošlji zahtevek/obrazec na občino.",
-            "4) Prejmeš informativni izračun in navodila za plačilo.",
-            "",
-            f"**Kontakt**: {cfg.FALLBACK_CONTACT}",
-        ]
-        return "\n".join(parts)
+        return (
+            "Komunalni prispevek – osnove\n"
+            "Kaj: plačilo dela stroškov komunalne opreme.\n"
+            "Kdo: investitor ali lastnik pri novogradnji ali spremembi namembnosti.\n"
+            "Kdaj: pred izdajo gradbenega dovoljenja.\n"
+            "Kje: vloga na občino, možen informativni izračun.\n"
+            "Informativni izračun – koraki\n"
+            "1) Podatki o parceli in objektu (namembnost, BTP, priključki).\n"
+            "2) Izsek prostorskega akta ali lokacijska informacija.\n"
+            "3) Pošlji zahtevek ali obrazec na občino.\n"
+            "4) Prejmeš informativni izračun in navodila za plačilo.\n"
+            f"Kontakt: {cfg.FALLBACK_CONTACT}"
+        )
 
     def _answer_ev(self) -> str:
-        return f"**Polnilnice za EV:**\n- **Rače** in **Fram** – {cfg.POLNILNICE_NOTE}"
+        return f"Polnilnice za EV\nLokaciji: Rače in Fram\nOpomba: {cfg.POLNILNICE_NOTE}"
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str) -> str:
         self.nalozi_bazo()
@@ -1112,7 +1191,7 @@ ODGOVOR:"""
         zgodovina = ses['zgodovina']; stanje = ses['stanje']
         q_norm = normalize_text(uporabnikovo_vprasanje)
 
-        # Če smo v transportnem "vprašanju po delih", a novo vprašanje ni več transportno, počisti
+        # če smo v transportnem "vprašanju po delih", a novo vprašanje ni več transportno, počisti
         if stanje.get('namen') == 'transport' and stanje.get('transport_waiting') and not _looks_like_transport_followup(q_norm):
             stanje.pop('namen', None); stanje.pop('transport_waiting', None)
 
@@ -1121,8 +1200,8 @@ ODGOVOR:"""
 
         # HITRE VEJE
         if intent == 'zapora_vloga':
-            odgovor = (f"**Vloga za zaporo ceste**: {cfg.ROAD_CLOSURE_FORM_URL}\n"
-                       f"- Priloži skico/načrt zapore in terminski plan.")
+            odgovor = (f"Vloga za zaporo ceste: {cfg.ROAD_CLOSURE_FORM_URL}\n"
+                       f"Priloži skico ali načrt zapore in terminski plan.")
         elif intent == 'contact':
             odgovor = self._answer_contacts(q_norm)
         elif intent == 'ev_charging':
@@ -1132,10 +1211,10 @@ ODGOVOR:"""
         elif intent == 'awards':
             odgovor = self._answer_awards(q_norm) or "Žal nimam podatkov."
         elif intent == 'who_is_mayor':
-            odgovor = "Župan občine Rače-Fram je **Samo Rajšp**."
+            odgovor = "Župan občine Rače-Fram je Samo Rajšp."
         elif intent == 'pgd':
             out = self._answer_pgd_list()
-            if "povelj" in q_norm: out += "\n\n(Opomba: za poveljniške podatke povej natančno društvo.)"
+            if "povelj" in q_norm: out += "\n\nOpomba: za poveljniške podatke navedi natančno društvo."
             odgovor = out
         elif intent == 'transport' or (stanje.get('namen') == 'transport' and stanje.get('transport_waiting') and _looks_like_transport_followup(q_norm)):
             odgovor = self._answer_transport(uporabnikovo_vprasanje, q_norm, stanje)
@@ -1150,19 +1229,21 @@ ODGOVOR:"""
             built = self._zgradi_rag_prompt(uporabnikovo_vprasanje, zgodovina)
             if not built:
                 if intent == 'gradbeno':
-                    odgovor = ("**Gradbeno dovoljenje – postopek (povzetek):**\n"
-                               "- **1) Lokacijska informacija** (merila in pogoji)\n"
-                               "- **2) PGD** (projektna dokumentacija + soglasja)\n"
-                               "- **3) Vloga** na **UE Maribor** ali eUprava\n"
-                               "- **Veljavnost**: 2–3 leta\n"
-                               f"- **Povezava**: {cfg.EUPRAVA_GRADBENO_URL}")
+                    odgovor = (
+                        "Gradbeno dovoljenje – postopek (povzetek)\n"
+                        "1) Lokacijska informacija: merila in pogoji.\n"
+                        "2) PGD: projektna dokumentacija in soglasja.\n"
+                        "3) Vloga: UE Maribor ali eUprava.\n"
+                        "Veljavnost: 2–3 leta.\n"
+                        f"Povezava: {cfg.EUPRAVA_GRADBENO_URL}"
+                    )
                 else:
                     odgovor = "Žal o tej temi nimam dovolj podatkov."
             else:
                 prompt, fallback_raw = built
                 odgovor = self._call_llm(prompt)
                 if not odgovor or odgovor.startswith("Oprostite"):
-                    odgovor = f"**Povzetek iz vira (safe-mode):**\n{fallback_raw}"
+                    odgovor = f"Povzetek iz vira (safe-mode)\n{fallback_raw}"
 
         # beleženje in stanje
         zgodovina.append((uporabnikovo_vprasanje, odgovor))
