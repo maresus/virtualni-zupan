@@ -26,7 +26,7 @@ from .VIRT_ZUPAN_RF_api import (
 
 load_dotenv()
 app = Flask(__name__)
-CORS(app, resources={r"/ask": {}, r"/widget.js": {}, r"/debug": {}, r"/db-info": {}}) 
+CORS(app, resources={r"/ask": {}, r"/widget.js": {}, r"/debug": {}, r"/db-info": {}, r"/add-staff": {}, r"/check-staff": {}}) 
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "prosim-spremeni-to-skrivno-vrednost")
 
 ZUPAN_INSTANCE = None
@@ -318,6 +318,165 @@ def test_queries():
         
     except Exception as e:
         return jsonify({'error': str(e)})
+
+# ============================================================================
+# STAFF MANAGEMENT ENDPOINTS - DODAJANJE ZAPOSLENIH V CHROMADB
+# ============================================================================
+
+@app.route('/add-staff', methods=['POST'])
+def add_staff():
+    """Endpoint za dodajanje podatkov o zaposlenih v ChromaDB"""
+    
+    # Podatki o zaposlenih
+    staff_data = [
+        {"text": "Direktorica občinske uprave Občine Rače-Fram je mag. Karmen Kotnik. Njen kontakt je karmen.kotnik@race-fram.si ali 02 609 60 19.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "direktor", "oseba": "Karmen Kotnik"}},
+        {"text": "Višja svetovalka za prostorsko planiranje in premoženjske zadeve je Suzana Pungartnik. Njen kontakt je suzana.pungartnik@race-fram.si ali 02 609 60 15.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "prostorsko_planiranje", "oseba": "Suzana Pungartnik"}},
+        {"text": "Računovodja VII/II je Rosvita Robar. Njen kontakt je rosvita.robar@race-fram.si ali 02 609 60 14.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "racunovodja", "oseba": "Rosvita Robar"}},
+        {"text": "Višja svetovalka za investicije in investicijsko vzdrževanje je Mateja Frešer. Njen kontakt je mateja.freser@race-fram.si ali 02 609 60 23.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "investicije", "oseba": "Mateja Frešer"}},
+        {"text": "Višja svetovalka za okolje, kmetijstvo, turizem in civilno zaščito je Tanja Kosi. Njen kontakt je tanja.kosi@race-fram.si ali 02 609 60 24.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "turizem", "oseba": "Tanja Kosi"}},
+        {"text": "Višja svetovalka za delovne in splošne pravne zadeve ter javna naročila je Anja Čelan. Njen kontakt je anja.celan@race-fram.si ali 02 609 60 27.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "pravne_zadeve", "oseba": "Anja Čelan"}},
+        {"text": "Višja svetovalka za družbene dejavnosti je Monika Skledar. Njen kontakt je monika.skledar@race-fram.si ali 02 609 60 28.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "druzbene_dejavnosti", "oseba": "Monika Skledar"}},
+        {"text": "Referentka za računovodstvo in šport je Klaudia Sovdat. Njen kontakt je klaudia.sovdat@race-fram.si ali 02 609 60 12.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "sport", "oseba": "Klaudia Sovdat"}},
+        {"text": "Referentka – tajnica je Marjetka Kristl. Njen kontakt je marjetka.kristl@race-fram.si ali 02 609 60 10.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "tajnica", "oseba": "Marjetka Kristl"}},
+        {"text": "Administrator V je Jožica Medved. Njen kontakt je jozica.medved@race-fram.si ali 02 609 60 13.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "administrator", "oseba": "Jožica Medved"}},
+        {"text": "Vodja režijskega obrata je Gregor Ovnik. Njegov kontakt je gregor.ovnik@race-fram.si ali 02 609 60 25. Njegova mobilna številka je 051 815 947.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "rezijski_obrat", "oseba": "Gregor Ovnik"}},
+        {"text": "Delovodja v režijskem obratu je Vojko Kmetec. Njegova telefonska številka je 051 367 478.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "rezijski_obrat", "oseba": "Vojko Kmetec"}},
+        {"text": "Delovodja v režijskem obratu je Ludvik Stupan. Njegova telefonska številka je 051 661 850.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "rezijski_obrat", "oseba": "Ludvik Stupan"}},
+        {"text": "Inštalater v režijskem obratu je Aleš Šmelc. Njegova telefonska številka je 041 534 402.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "rezijski_obrat", "oseba": "Aleš Šmelc"}},
+        {"text": "Inštalater v režijskem obratu je Miran Grašič. Njegova telefonska številka je 031 418 031.", "metadata": {"kategorija": "Zaposleni", "vir": "Imenik zaposlenih", "tip": "rezijski_obrat", "oseba": "Miran Grašič"}}
+    ]
+    
+    try:
+        zupan = get_zupan()
+        collection = zupan.kb_manager.collection
+        
+        if not collection:
+            return jsonify({'error': 'ChromaDB collection ni na voljo'}), 500
+        
+        # Preveri če podatki že obstajajo
+        try:
+            existing = collection.get(where={"kategorija": "Zaposleni"}, limit=1)
+            if existing and existing.get('documents') and len(existing['documents']) > 0:
+                return jsonify({
+                    'message': 'Podatki o zaposlenih že obstajajo',
+                    'existing_count': len(existing['documents'])
+                })
+        except Exception as e:
+            print(f"Warning: Could not check existing staff: {e}")
+        
+        # Dodaj nove podatke
+        texts = [item["text"] for item in staff_data]
+        metadatas = [item["metadata"] for item in staff_data] 
+        ids = [f"staff_{i}_{item['metadata']['oseba'].replace(' ', '_').lower()}" for i, item in enumerate(staff_data)]
+        
+        collection.add(
+            documents=texts,
+            metadatas=metadatas, 
+            ids=ids
+        )
+        
+        # Test iskanja
+        try:
+            test_results = collection.query(
+                query_texts=["kdo je zadolžen za turizem"],
+                n_results=3,
+                where={"kategorija": "Zaposleni"}
+            )
+            
+            test_query_count = len(test_results.get('documents', [[]])[0]) if test_results.get('documents') else 0
+            sample_result = test_results.get('documents', [[]])[0][:1] if test_results.get('documents') else []
+        except Exception as e:
+            print(f"Warning: Test query failed: {e}")
+            test_query_count = 0
+            sample_result = []
+        
+        return jsonify({
+            'message': f'Successfully added {len(staff_data)} staff records',
+            'total_documents': collection.count(),
+            'test_query_results': test_query_count,
+            'sample_result': sample_result
+        })
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+@app.route('/check-staff')
+def check_staff():
+    """Preveri ali so podatki o zaposlenih v bazi"""
+    try:
+        zupan = get_zupan()
+        collection = zupan.kb_manager.collection
+        
+        if not collection:
+            return jsonify({'error': 'ChromaDB collection ni na voljo'})
+        
+        # Poizkusi najti zaposlene
+        try:
+            staff_results = collection.get(
+                where={"kategorija": "Zaposleni"}, 
+                limit=20,
+                include=["documents", "metadatas"]
+            )
+        except Exception as e:
+            return jsonify({
+                'error': f'Could not query staff: {str(e)}',
+                'staff_count': 0,
+                'sample_staff': [],
+                'sample_metadata': []
+            })
+        
+        return jsonify({
+            'staff_count': len(staff_results.get('documents', [])),
+            'sample_staff': staff_results.get('documents', [])[:3],
+            'sample_metadata': staff_results.get('metadatas', [])[:3]
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)})
+
+@app.route('/reset-staff', methods=['POST']) 
+def reset_staff():
+    """Počisti in znova doda podatke o zaposlenih"""
+    try:
+        zupan = get_zupan()
+        collection = zupan.kb_manager.collection
+        
+        if not collection:
+            return jsonify({'error': 'ChromaDB collection ni na voljo'}), 500
+        
+        # Poizkusi pobrisati obstoječe zaposlene
+        try:
+            existing = collection.get(where={"kategorija": "Zaposleni"})
+            if existing and existing.get('ids'):
+                collection.delete(ids=existing['ids'])
+                deleted_count = len(existing['ids'])
+            else:
+                deleted_count = 0
+        except Exception as e:
+            print(f"Warning: Could not delete existing staff: {e}")
+            deleted_count = 0
+        
+        # Klic add_staff funkcije
+        add_result = add_staff()
+        
+        if add_result[1] == 200:  # Če je add_staff uspešen
+            result_data = add_result[0].get_json()
+            result_data['deleted_count'] = deleted_count
+            result_data['message'] = f"Reset completed: deleted {deleted_count}, added {len(staff_data)}"
+            return jsonify(result_data)
+        else:
+            return add_result
+            
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
