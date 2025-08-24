@@ -1,6 +1,6 @@
 # VIRT_ZUPAN_RF_api.py — stabilni “backup” + odpadki + NAP + hiti
-# Verzija 36.0 — FIX: Chroma get() brez "ids"; odpadki robustno + "naslednji"
-# ---------------------------------------------------------------------------
+# Verzija 37.0 — FIX: strogo ujemanje po "korenih" besed (Bistriška ≠ Pot k Mlinu)
+# -----------------------------------------------------------------------------
 
 import os
 import sys
@@ -62,6 +62,11 @@ KLJUCNE_BESEDE_PROMET = [
     "zapora", "zapore", "zaprta", "zastoj", "gneča", "kolona", "zaprt", "oviran"
 ]
 
+GENERIC_WORDS = {
+    "cesta","cesti","ulica","ulici","pot","trg","naselje","obmocje","območje",
+    "pri","na","v","pod","nad","k","do","od","proti","pod","terasa","terasami"
+}
+
 # -----------------------------------------------------------------------------
 # Normalizacija & fuzzy
 # -----------------------------------------------------------------------------
@@ -74,12 +79,17 @@ def normalize_text(s: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
+def fuzzy_ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
+
 def fuzzy_match(a: str, b: str, threshold: float = 0.8) -> bool:
+    if not a or not b:
+        return False
     a_n = normalize_text(a)
     b_n = normalize_text(b)
     if a_n in b_n or b_n in a_n:
         return True
-    return SequenceMatcher(None, a_n, b_n).ratio() >= threshold
+    return fuzzy_ratio(a_n, b_n) >= threshold
 
 def slovenian_variant_equivalent(a: str, b: str) -> bool:
     a_n = normalize_text(a)
@@ -91,26 +101,60 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
             return True
     return False
 
-def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.85) -> bool:
-    """Ujemanje fraze (npr. 'bistriska cesta') s tok-om ('bistriska'), z ignoriranjem generičnih besed in fleksijo."""
-    generic = {"cesta", "cesti", "ulica", "ulici", "pot", "trg", "ob", "naselje", "naselju"}
+def root_token(w: str) -> str:
+    """Zelo enostavno 'stemanjenje' slovenskih uličnih besed (koren)."""
+    w = normalize_text(w)
+    if not w:
+        return ""
+    # odstrani generike
+    if w in GENERIC_WORDS:
+        return ""
+    # končnice -ska/-ski/-sko → -sk
+    w = re.sub(r'(ska|ski|sko|ške|ški|ško|ska|ski|sko)$', 'sk', w)
+    # odsekaj več končnih samoglasnikov (pogosto bistriska/bistriski)
+    w = re.sub(r'(a|e|i|o|u)+$', '', w)
+    # posebni primeri: mlinu → mlin
+    w = re.sub(r'linu$', 'lin', w)
+    # krajšaj dvojine/množine
+    w = re.sub(r'(ji|mi|ni|li|vi|ti)$', '', w)
+    return w
+
+def roots_of_phrase(text: str) -> set:
+    toks = [t for t in normalize_text(text).split() if t]
+    roots = {root_token(t) for t in toks}
+    return {r for r in roots if r and r not in GENERIC_WORDS}
+
+def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.86) -> bool:
+    """Ujemanje fraze (npr. 'bistriska cesta') s tok-om ('bistriska'), z ignoriranjem generičnih besed in fleksijo + koreni."""
     qp = normalize_text(query_phrase)
     st = normalize_text(street_tok)
+
     if slovenian_variant_equivalent(qp, st):
         return True
-    q_words = [w for w in qp.split() if w not in generic]
-    street_words = [w for w in st.split() if w not in generic]
+
+    q_words = [w for w in qp.split() if w not in GENERIC_WORDS]
+    street_words = [w for w in st.split() if w not in GENERIC_WORDS]
+
+    # root gate: vsaj en skupen koren
+    qr = {root_token(w) for w in q_words}
+    sr = {root_token(w) for w in street_words}
+    qr.discard(""); sr.discard("")
+    if qr and sr and qr.isdisjoint(sr):
+        return False
+
     if not q_words:
         return fuzzy_match(qp, st, threshold)
+
+    # preveri posamezne besede
     for qw in q_words:
         if slovenian_variant_equivalent(qw, st):
             return True
-        if SequenceMatcher(None, qw, st).ratio() >= threshold or (qw in st or st in qw):
+        if fuzzy_ratio(qw, st) >= threshold or (qw in st or st in qw):
             return True
         for sw in street_words:
             if slovenian_variant_equivalent(qw, sw):
                 return True
-            if SequenceMatcher(None, qw, sw).ratio() >= threshold or (qw in sw or sw in qw):
+            if fuzzy_ratio(qw, sw) >= threshold or (qw in sw or sw in qw):
                 return True
     return False
 
@@ -182,16 +226,16 @@ def get_canonical_waste(text: str):
                 return canonical
     for canonical, variants in WASTE_TYPE_VARIANTS.items():
         for v in variants:
-            if SequenceMatcher(None, norm, normalize_text(v)).ratio() >= 0.85:
+            if fuzzy_ratio(norm, normalize_text(v)) >= 0.85:
                 return canonical
     return None
 
 def extract_locations_from_naselja(naselja_field: str):
     """
     Robustno razbije 'naselja':
-    - če so ločila (, ; \n) → delimo po njih
+    - če so ločila (, ; \n) → delimo po njih (celi odstavki kot fraze)
     - če NI ločil → razbij po presledkih, filtriraj šum (h, št, številke, generične besede)
-    Vrne normalizirane tokene/fraze.
+    Vrne NORMALIZIRANE fraze (npr. 'mlinska ulica', 'pot k mlinu', 'bistriska cesta').
     """
     if not naselja_field:
         return []
@@ -212,26 +256,22 @@ def extract_locations_from_naselja(naselja_field: str):
         return out
 
     toks = [t.strip() for t in text.split() if t.strip()]
-    generic = {
-        "cesta","cesti","ulica","ulici","pot","trg","naselje","obmocje","območje",
-        "pri","na","v","pod","nad","k","do","od","proti"
-    }
-    noise = {
-        "h","st","št","stev","stevilka","hiscna","hiscne","hiscni",
-        "hisna","hisne","hisni","hisa","hise"
-    }
     out, seen = [], set()
+    buf = []
     for tok in toks:
         n = normalize_text(tok)
-        if not n or n in generic or n in noise:
+        if not n:
             continue
-        if n.isdigit():
-            continue
-        if len(n) < 3:
-            continue
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
+        # gradimo fraze (ohranimo 'pot k mlinu' kot celoto)
+        buf.append(n)
+    phrase = " ".join(buf).strip()
+    if phrase:
+        # razbij po ' / ' če je
+        for p in re.split(r'\s*/\s*', phrase):
+            p = p.strip()
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
     return out
 
 # -----------------------------------------------------------------------------
@@ -249,7 +289,6 @@ def chroma_get_safe(collection, **kwargs):
     try:
         return collection.get(**kwargs)
     except Exception:
-        # failsafe brez include (privzeto vrne vse, kar sme)
         kwargs.pop("include", None)
         return collection.get(**kwargs)
 
@@ -258,7 +297,7 @@ def chroma_get_safe(collection, **kwargs):
 # -----------------------------------------------------------------------------
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 36.0 — RF_api backup + odpadki FIX)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 37.0 — RF_api backup + odpadki FIX 2)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.zgodovina_seje = {}
@@ -404,7 +443,7 @@ Samostojno vprašanje:"""
                 added = False
                 for m in merged:
                     ista_cesta = normalize_text(z['cesta']) == normalize_text(m['cesta'])
-                    opis_sim = SequenceMatcher(None, normalize_text(z['opis']), normalize_text(m['opis'])).ratio()
+                    opis_sim = fuzzy_ratio(z['opis'], m['opis'])
                     if ista_cesta and opis_sim >= 0.9:
                         added = True
                         break
@@ -422,7 +461,6 @@ Samostojno vprašanje:"""
     # ---------------- Odpadki ----------------
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
         print("-> Kličem specialista za odpadke...")
-        # varna inicializacija seje
         self.zgodovina_seje.setdefault(session_id, {"zgodovina": [], "stanje": {}})
         stanje = self.zgodovina_seje[session_id]["stanje"]
 
@@ -444,6 +482,7 @@ Samostojno vprašanje:"""
         iskani_tip = get_canonical_waste(vprasanje_norm)
         contains_naslednji = "naslednji" in vprasanje_norm
 
+        # stopwords za lokacije
         waste_type_stopwords = {normalize_text(k) for k in WASTE_TYPE_VARIANTS.keys()}
         for variants in WASTE_TYPE_VARIANTS.values():
             for v in variants:
@@ -474,7 +513,16 @@ Samostojno vprašanje:"""
             filtered_phrases.append(p)
         location_phrases = filtered_phrases
 
-        street_indicators = {"cesta", "ulica", "pot", "trg", "naslov", "pod", "terasami"}
+        # če ni nič lokacij, ne naredimo napačnih fallbackov
+        if not location_phrases and iskani_tip:
+            return "Dodaj prosim ulico ali območje, npr. 'Bistriška cesta, Fram'."
+
+        # izračun skupnih korenov fraz (uporabili bomo kot varnostni filter)
+        phrase_roots = set()
+        for p in location_phrases:
+            phrase_roots |= roots_of_phrase(p)
+
+        street_indicators = {"cesta", "ulica", "pot", "trg", "naslov"}
         is_explicit_location = (any(len(p.split()) > 1 for p in location_phrases) or
                                 any(ind in vprasanje_norm for ind in street_indicators))
 
@@ -499,6 +547,7 @@ Samostojno vprašanje:"""
         docs = vsi_urniki['documents']
         metas = vsi_urniki.get('metadatas') or [{}] * len(docs)
 
+        # ----- preiskava po dokumentih -----
         for i in range(len(docs)):
             meta = metas[i] or {}
             doc_text = docs[i] or ""
@@ -515,11 +564,17 @@ Samostojno vprašanje:"""
 
             # exact
             for phrase in location_phrases:
+                pr = roots_of_phrase(phrase)
                 for street_tok in lokacije:
+                    # varnost: zahtevaj presek korenov
+                    s_roots = roots_of_phrase(street_tok)
+                    if pr and s_roots and pr.isdisjoint(s_roots):
+                        continue
                     if normalize_text(phrase) == normalize_text(street_tok) or slovenian_variant_equivalent(phrase, street_tok):
                         exact_street_matches.append({
                             'doc': doc_text, 'meta': meta, 'tip_canon': meta_tip_canon,
                             'matched_street': street_tok, 'matched_phrase': phrase,
+                            'score': 1.0,
                             'datumi': extract_datumi(doc_text)
                         })
                         matched_for_this_doc = True
@@ -530,12 +585,29 @@ Samostojno vprašanje:"""
             # fuzzy
             if not matched_for_this_doc:
                 for phrase in location_phrases:
+                    pr = roots_of_phrase(phrase)
                     for street_tok in lokacije:
-                        thr = 0.80 if len(phrase.split()) > 1 else 0.85
+                        thr = 0.88 if len(phrase.split()) == 1 else 0.83
+                        # root gate
+                        s_roots = roots_of_phrase(street_tok)
+                        if pr and s_roots and pr.isdisjoint(s_roots):
+                            continue
                         if street_phrase_matches(phrase, street_tok, threshold=thr):
+                            # točkovanje
+                            base_score = max(
+                                fuzzy_ratio(phrase, street_tok),
+                                max((fuzzy_ratio(phrase, w) for w in street_tok.split() if w not in GENERIC_WORDS), default=0)
+                            )
+                            # bonus za multi frazo
+                            if len(phrase.split()) > 1:
+                                base_score += 0.04
+                            # bonus za popoln koren
+                            if pr & s_roots:
+                                base_score += 0.03
                             fuzzy_street_matches.append({
                                 'doc': doc_text, 'meta': meta, 'tip_canon': meta_tip_canon,
                                 'matched_street': street_tok, 'matched_phrase': phrase,
+                                'score': min(base_score, 1.0),
                                 'datumi': extract_datumi(doc_text)
                             })
                             matched_for_this_doc = True
@@ -544,17 +616,47 @@ Samostojno vprašanje:"""
                         break
 
             # area
-            if not matched_for_this_doc and obm:
+            if not matched_for_this_doc and obm and phrase_roots:
                 for phrase in location_phrases:
-                    if fuzzy_match(phrase, obm, threshold=0.8):
+                    # tudi za območje zahtevamo vsaj delno ujemanje korenov
+                    if phrase_roots.isdisjoint(roots_of_phrase(obm)):
+                        continue
+                    if fuzzy_match(phrase, obm, threshold=0.82):
                         area_matches.append({
                             'doc': doc_text, 'meta': meta, 'tip_canon': meta_tip_canon,
                             'matched_area': obm, 'matched_phrase': phrase,
+                            'score': fuzzy_ratio(phrase, obm),
                             'datumi': extract_datumi(doc_text)
                         })
                         break
 
-        kandidati = exact_street_matches or fuzzy_street_matches or area_matches
+        # ----- izbira kandidatov -----
+        if exact_street_matches:
+            # če imamo več exactov, ohrani tiste z največ točk (v praksi 1.0)
+            kandidati = exact_street_matches
+        elif fuzzy_street_matches:
+            fuzzy_street_matches.sort(key=lambda x: x.get('score', 0), reverse=True)
+            kandidati = fuzzy_street_matches
+        else:
+            kandidati = area_matches
+
+        # če je bila eksplicitna lokacija in imamo več kandidatov, preferiraj tiste,
+        # kjer se KOREN matched_street prekriva z KORENOM najbolj “dolge” query fraze
+        if kandidati and is_explicit_location:
+            # izberi najdaljšo frazo iz uporabnikovega vprašanja
+            primary = None
+            for size in (3, 2, 1):
+                cands = [p for p in location_phrases if len(p.split()) == size]
+                if cands:
+                    primary = cands[0]
+                    break
+            if primary:
+                pr = roots_of_phrase(primary)
+                filt = [c for c in kandidati if pr & roots_of_phrase(c.get('matched_street', '') or c.get('matched_area', ''))]
+                if filt:
+                    # v tej skupini še po score
+                    filt.sort(key=lambda x: x.get('score', 0), reverse=True)
+                    kandidati = filt
 
         if is_explicit_location and not kandidati:
             if not iskani_tip:
@@ -589,7 +691,7 @@ Samostojno vprašanje:"""
                 return f"Naslednji odvoz za **{best_tip}** na **{(best_loc or '').title()}** je **{best_dt.strftime('%d.%m.%Y')}**."
             return "Za iskani tip in lokacijo v dokumentu ni prihodnjih terminov."
 
-        # sicer: prikaži prvo dobro ujemanje
+        # sicer: prikaži prvo najboljše ujemanje
         c = kandidati[0]
         tip = c['meta'].get('tip_odpadka', c.get('tip_canon', ''))
         loc = (c.get('matched_street') or c.get('matched_area') or c['meta'].get('obmocje', '')).title()
