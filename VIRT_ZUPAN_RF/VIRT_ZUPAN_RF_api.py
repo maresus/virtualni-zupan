@@ -304,6 +304,8 @@ FALSE_POSITIVE_WASTE_PATTERNS = [
     r"\bkomunaln\w*\s+storitv\w*\b",
     r"\bvodovod\w*\b",
     r"\bkanalizac\w*\b",
+    r"\bpolnilnic\w*\b",  # DODANO
+    r"\bprispevek\w*\b"   # DODANO
 ]
 
 def _has_waste_intent(text_norm: str) -> bool:
@@ -324,6 +326,15 @@ def _has_waste_intent(text_norm: str) -> bool:
 
 def _has_traffic_intent(text_norm: str) -> bool:
     return any(re.search(r'\b' + re.escape(k) + r'\b', text_norm) for k in KLJUCNE_BESEDE_PROMET_TRDE)
+
+def _has_municipal_tax_intent(text_norm: str) -> bool:
+    """Nova funkcija za komunalne prispevke/takse"""
+    tax_keywords = [
+        "komunaln", "prispevek", "taksa", "davek", "placilo", "plačilo",
+        "racun", "račun", "obveznost", "strosk", "stroški"
+    ]
+    
+    return any(re.search(r'\b' + re.escape(k) + r'\b', text_norm) for k in tax_keywords)    
 
 # -----------------------------------------------------------------------------
 # Thread-safe Cache
@@ -1023,12 +1034,14 @@ Samostojno vprašanje:"""
        try:
            is_waste = _has_waste_intent(vprasanje_lower)
            is_traffic = _has_traffic_intent(vprasanje_lower)
+           is_municipal_tax = _has_municipal_tax_intent(vprasanje_lower)
 
            if LLM_DEBUG:
-               print(f"[ROUTER] waste={is_waste}, traffic={is_traffic}")
+               print(f"[ROUTER] waste={is_waste}, traffic={is_traffic}, municipal_tax={is_municipal_tax}")
 
            # 1) Waste ima absolutno prednost
            if is_waste:
+               print(f"[ROUTER] → WASTE SERVICE")
                odgovor = self.waste_service.process_waste_query(
                    pametno_vprasanje, self.zgodovina_seje[session_id]['stanje']
                )
@@ -1036,10 +1049,17 @@ Samostojno vprašanje:"""
 
            # 2) Promet samo če ni waste
            elif is_traffic:
+               print(f"[ROUTER] → TRAFFIC SERVICE")
                odgovor = self.traffic_service.check_traffic()
                model_used = "nap-api"
 
-           # 3) Rule-based
+           # 3) Komunalni prispevek - specifična obravnava
+           elif is_municipal_tax:
+               print(f"[ROUTER] → MUNICIPAL TAX (using RAG)")
+               # Ne uporabljamo rule-based, ampak RAG za komunalne prispevke
+               odgovor, model_used = self._process_with_rag(uporabnikovo_vprasanje, vprasanje_lower)
+
+           # 4) Rule-based
            else:
                rb = self.rule_service.check_rules(vprasanje_lower)
                if rb:
