@@ -1,0 +1,71 @@
+{
+  "test_20250826_065850": {
+    "created": "2025-08-26T06:58:50.370511",
+    "history": [
+      {
+        "timestamp": "2025-08-26T06:58:51.864290",
+        "question": "Koliko prebivalcev ima občina?",
+        "answer": "Žal o tem trenutno nimam informacij. Prosim pokličite občino na 02 609 60 10.",
+        "metadata": {
+          "intent": "general",
+          "confidence": 0.0,
+          "no_results": true,
+          "response_time": "1.49s"
+        }
+      },
+      {
+        "timestamp": "2025-08-26T06:58:53.267309",
+        "question": "Kdaj je odvoz stekla na Bistriški cesti?",
+        "answer": "Žal ne najdem podatkov o odvozu odpadkov za vašo poizvedbo.",
+        "metadata": {
+          "intent": "waste",
+          "confidence": 0.2,
+          "response_time": "1.40s"
+        }
+      },
+      {
+        "timestamp": "2025-08-26T06:58:53.289116",
+        "question": "Kakšno je stanje prometa?",
+        "answer": "Prometne informacije trenutno niso dostopne.",
+        "metadata": {
+          "intent": "traffic",
+          "confidence": 0.1111111111111111,
+          "response_time": "0.02s"
+        }
+      },
+      {
+        "timestamp": "2025-08-26T06:58:54.696235",
+        "question": "Kdo je župan občine?",
+        "answer": "Žal o tem trenutno nimam informacij. Prosim pokličite občino na 02 609 60 10.",
+        "metadata": {
+          "intent": "general",
+          "confidence": 0.0,
+          "no_results": true,
+          "response_time": "1.41s"
+        }
+      },
+      {
+        "timestamp": "2025-08-26T06:58:56.117832",
+        "question": "Razloži mi postopek za gradbeno dovoljenje",
+        "answer": "Žal o tem trenutno nimam informacij. Prosim pokličite občino na 02 609 60 10.",
+        "metadata": {
+          "intent": "procedure",
+          "confidence": 0.25,
+          "no_results": true,
+          "response_time": "1.42s"
+        }
+      },
+      {
+        "timestamp": "2025-08-26T06:58:57.315076",
+        "question": "Kaj pa papir?",
+        "answer": "Žal ne najdem podatkov o odvozu odpadkov za vašo poizvedbo.",
+        "metadata": {
+          "intent": "waste",
+          "confidence": 0.1,
+          "response_time": "1.20s"
+        }
+      }
+    ],
+    "metadata": {}
+  }
+}
