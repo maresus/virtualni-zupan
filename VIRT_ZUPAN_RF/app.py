@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 # Uvozi vse potrebne komponente
-from .VIRT_ZUPAN_RF_api import (
+from VIRT_ZUPAN_RF_api import (
     VirtualniZupan, 
     KnowledgeBaseManager, 
     TrafficService, 
