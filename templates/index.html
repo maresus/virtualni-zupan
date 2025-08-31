@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="sl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtualni župan Rače-Fram</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 2rem;
+            width: 90%;
+            max-width: 800px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            object-fit: contain;
+        }
+
+        .header-text {
+            text-align: center;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 2rem;
+            font-size: 1.1rem;
+        }
+
+        .chat-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e1e5e9;
+            border-radius: 15px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 1rem;
+            padding: 1rem;
+            border-radius: 12px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+
+        .user-message {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+
+        .bot-message {
+            background: white;
+            border: 1px solid #e1e5e9;
+            color: #333;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        #questionInput {
+            flex: 1;
+            padding: 1rem;
+            border: 2px solid #e1e5e9;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        #questionInput:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        #askButton {
+            padding: 1rem 2rem;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #askButton:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #askButton:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .examples {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .example {
+            background: #f8f9fa;
+            border: 1px solid #e1e5e9;
+            border-radius: 8px;
+            padding: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+            font-size: 0.9rem;
+        }
+
+        .example:hover {
+            background: #e9ecef;
+            transform: translateY(-1px);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            color: #667eea;
+            font-weight: 500;
+        }
+
+        .status {
+            text-align: center;
+            margin-top: 1rem;
+            padding: 0.5rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+        }
+
+        .status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 1rem;
+                padding: 1.5rem;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .input-container {
+                flex-direction: column;
+            }
+
+            .examples {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <img src="/static/images/grb.png" alt="Grb občine Rače-Fram" class="logo">
+            <div class="header-text">
+                <h1>Virtualni župan</h1>
+                <p class="subtitle">Občina Rače-Fram • 24/7 digitalni asistent</p>
+            </div>
+        </div>
+        
+        <div class="chat-container" id="chatContainer">
+            <div class="message bot-message">
+                Pozdravljeni! Sem vaš virtualni župan občine Rače-Fram. Lahko me vprašate karkoli o naši občini - od jedilnikov v šolah do odvoza odpadkov, od kontaktnih podatkov do občinskih storitev. Kako vam lahko pomagam?
+            </div>
+        </div>
+
+        <div class="input-container">
+            <input type="text" id="questionInput" placeholder="Vpišite svoje vprašanje..." onkeypress="if(event.key==='Enter') askQuestion()">
+            <button id="askButton" onclick="askQuestion()">Vprašaj</button>
+        </div>
+
+        <div class="loading" id="loading">Iščem odgovor...</div>
+
+        <div class="examples">
+            <div class="example" onclick="setQuestion('Koliko prebivalcev ima občina?')">
+                👥 Koliko prebivalcev ima občina?
+            </div>
+            <div class="example" onclick="setQuestion('Kaj je za malico jutri v OŠ Rače?')">
+                🍎 Kaj je za malico jutri?
+            </div>
+            <div class="example" onclick="setQuestion('Kdaj je odvoz smeti na Bistriški cesti?')">
+                🗑️ Kdaj je odvoz smeti?
+            </div>
+            <div class="example" onclick="setQuestion('Kontakt občine')">
+                📞 Kontakt občine
+            </div>
+        </div>
+
+        <div class="status online">
+            🟢 Sistem je online in pripravljen za uporabo
+        </div>
+    </div>
+
+    <script>
+        function setQuestion(question) {
+            document.getElementById('questionInput').value = question;
+            askQuestion();
+        }
+
+        async function askQuestion() {
+            const input = document.getElementById('questionInput');
+            const question = input.value.trim();
+            
+            if (!question) return;
+
+            const chatContainer = document.getElementById('chatContainer');
+            const loading = document.getElementById('loading');
+            const askButton = document.getElementById('askButton');
+
+            // Add user message
+            const userMessage = document.createElement('div');
+            userMessage.className = 'message user-message';
+            userMessage.textContent = question;
+            chatContainer.appendChild(userMessage);
+
+            // Clear input and show loading
+            input.value = '';
+            loading.style.display = 'block';
+            askButton.disabled = true;
+
+            try {
+                const response = await fetch('/ask', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ question: question })
+                });
+
+                const data = await response.json();
+
+                // Add bot response
+                const botMessage = document.createElement('div');
+                botMessage.className = 'message bot-message';
+                botMessage.innerHTML = formatAnswer(data.answer || 'Oprostite, prišlo je do napake.');
+                chatContainer.appendChild(botMessage);
+
+            } catch (error) {
+                const errorMessage = document.createElement('div');
+                errorMessage.className = 'message bot-message';
+                errorMessage.textContent = 'Oprostite, prišlo je do napake pri povezavi. Poskusite kasneje.';
+                chatContainer.appendChild(errorMessage);
+            }
+
+            // Hide loading and enable button
+            loading.style.display = 'none';
+            askButton.disabled = false;
+
+            // Scroll to bottom
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function formatAnswer(answer) {
+            // Simple formatting for better readability
+            return answer
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\n/g, '<br>');
+        }
+
+        // Auto-focus input
+        document.getElementById('questionInput').focus();
+    </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import os
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 from VIRT_ZUPAN_RF_api import VirtualniZupan
 
@@ -11,14 +11,7 @@ zupan = VirtualniZupan()
 
 @app.route('/')
 def home():
-    return jsonify({
-        "message": "Virtualni župan Rače-Fram API",
-        "status": "running",
-        "endpoints": {
-            "/ask": "POST - Ask a question",
-            "/": "GET - This page"
-        }
-    })
+    return render_template('index.html')
 
 @app.route('/ask', methods=['POST'])
 def ask_question():
@@ -47,4 +40,3 @@ def ask_question():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
