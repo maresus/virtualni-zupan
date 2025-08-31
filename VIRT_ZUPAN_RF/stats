@@ -1,0 +1,14 @@
+# 1. Nastavite environment variables
+export OPENAI_API_KEY="your-key"
+export NAP_USERNAME="your-nap-user"  # če imate
+export NAP_PASSWORD="your-nap-pass"  # če imate
+
+# 2. Zaženite
+python VIRT_ZUPAN_RF_v42_ORCHESTRATOR.py
+
+# 3. Testirajte
+> Koliko prebivalcev ima občina?
+> Kdaj je odvoz stekla na Bistriški 15?
+> Ali imamo zobozdravnika?
+> stats
+> test

@@ -48,8 +48,6 @@ PROMET_FILTER_KLJUCNIKI = [
 ]
 KLJUCNE_BESEDE_ODPADKI = ["smeti", "odpadki", "odvoz", "odpavkov", "komunala"]
 KLJUCNE_BESEDE_PROMET = ["cesta", "ceste", "cesti", "promet", "dela", "delo", "zapora", "zapore", "zaprta", "zastoj", "gneča", "kolona"]
-KLJUCNE_BESEDE_LOKACIJE_ZA_ODPADKE = ["ulica", "cesta", "pot", "trg", "naselje", "bukovec", "terasami", "bistriska", "bistriška"]
-KLJUCNE_BESEDE_ZA_KONTAKT = ["kontakt", "telefon", "številka", "stevilka", "naslov", "email", "eposta"]
 
 # --- POMOŽNE FUNKCIJE ZA ODPADKE ---
 def normalize_text(s: str) -> str:
@@ -186,132 +184,6 @@ def extract_locations_from_naselja(naselja_field: str):
     # normalize and dedupe
     return list({normalize_text(p) for p in parts if p})
 
-def obravnavaj_jedilnik(vprasanje: str, collection):
-    """Izboljšana obdelava za jedilnike/malice - vrne SAMO iskani datum"""
-    vprasanje_lower = vprasanje.lower()
-    
-    # Določi šolo
-    school = "OŠ Rače"  # Privzeto
-    if "fram" in vprasanje_lower:
-        school = "OŠ Fram"
-    
-    # Določi datum
-    today = datetime.now()
-    target_date = None
-    
-    # Preveri ali je v vprašanju numerični datum (2.9, 1.9, itd.)
-    date_match = re.search(r'(\d{1,2})\.(\d{1,2})', vprasanje_lower)
-    if date_match:
-        dan = int(date_match.group(1))
-        mesec = int(date_match.group(2))
-        target_date = datetime(today.year, mesec, dan)
-    elif "jutri" in vprasanje_lower:
-        target_date = today + timedelta(days=1)
-    elif "pojutrišnjem" in vprasanje_lower:
-        target_date = today + timedelta(days=2)
-    elif "danes" in vprasanje_lower:
-        target_date = today
-    elif "ponedeljek" in vprasanje_lower:
-        days_ahead = 0 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-    elif "torek" in vprasanje_lower:
-        days_ahead = 1 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-    elif "sreda" in vprasanje_lower:
-        days_ahead = 2 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-    elif "četrtek" in vprasanje_lower:
-        days_ahead = 3 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-    elif "petek" in vprasanje_lower:
-        days_ahead = 4 - today.weekday()
-        if days_ahead <= 0:
-            days_ahead += 7
-        target_date = today + timedelta(days=days_ahead)
-    else:
-        target_date = today  # Danes
-
-    print(f"🗓️ DEBUG: Iščem {school} za datum {target_date.strftime('%d.%m.%Y')}")
-
-    # STRATEGIJA 1: Poskuši iskanje po metadatah
-    try:
-        # Poskuši z različnimi formati datuma
-        date_formats = [
-            target_date.strftime('%Y-%m-%d'),
-            target_date.strftime('%d.%m.%Y'),
-            target_date.strftime('%d.%m.'),
-            target_date.strftime('%-d.%-m.%Y'),
-            target_date.strftime('%-d.%-m.')
-        ]
-        
-        for date_format in date_formats:
-            try:
-                results = collection.get(
-                    where={"datum": date_format},
-                    include=["documents", "metadatas"]
-                )
-                
-                if results['documents']:
-                    for doc in results['documents']:
-                        if school in doc:
-                            return f"**{school} za {target_date.strftime('%d.%m.%Y')}:**\n\n{doc}"
-            except Exception:
-                continue
-                
-    except Exception as e:
-        print(f"Metadata search error: {e}")
-    
-    # STRATEGIJA 2: Semantic search s STROGIM datumskim filterjem
-    try:
-        search_queries = [
-            f"malica {target_date.strftime('%d.%m')} {school}",
-            f"jedilnik {target_date.strftime('%d.%m')} {school}",
-            f"malica {target_date.strftime('%-d.%-m')} {school}",
-            f"{school} {target_date.strftime('%d')} {target_date.strftime('%-m')} malica",
-        ]
-        
-        for query in search_queries:
-            results = collection.query(
-                query_texts=[query],
-                n_results=20,  # Povečaj za boljše iskanje
-                include=["documents", "metadatas"]
-            )
-            
-            if results['documents'] and results['documents'][0]:
-                # STROŽJI FILTER: išči TOČNO iskani datum
-                date_patterns = [
-                    target_date.strftime('%d.%m.%Y'),
-                    target_date.strftime('%d.%m.'),
-                    target_date.strftime('%-d.%-m.%Y'),
-                    target_date.strftime('%-d.%-m.'),
-                    f"{target_date.day}.{target_date.month}.",
-                    f"{target_date.day}. {target_date.month}."
-                ]
-                
-                for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-                    # Preveri ali dokument vsebuje TOČNO iskani datum in šolo
-                    doc_contains_school = school.lower() in doc.lower()
-                    doc_contains_date = any(pattern in doc for pattern in date_patterns)
-                    
-                    if doc_contains_school and doc_contains_date:
-                        print(f"✅ NAJDEN točen match: {school} + datum")
-                        return f"**{school} za {target_date.strftime('%d.%m.%Y')}:**\n\n{doc}"
-                        
-    except Exception as e:
-        print(f"Semantic search error: {e}")
-    
-    # STRATEGIJA 3: Če ni našel točnega datuma, NE vrni ničesar
-    print(f"❌ Ni najden točen podatek za {school} na {target_date.strftime('%d.%m.%Y')}")
-    
-    return f"Žal nimam podatkov o malici za **{school}** na datum **{target_date.strftime('%d.%m.%Y')}**.\n\nPoskusite:\n- Preveriti ali je datum pravilen\n- Kontaktirati šolo direktno\n- Vprašati za drug datum"
 class VirtualniZupan:
     def __init__(self):
         print("Inicializacija razreda VirtualniZupan (Verzija 34.1 - odpadki izboljšano)...")
@@ -526,7 +398,7 @@ Samostojno vprašanje:"""
         fuzzy_street_matches = []
         area_matches = []
 
-        # helper za scoring med frazo in uličnim tokenom z upoštevanjem slovenske variante
+        # helper za scoring med frazo in uličnim tokenom z upoštevanjem slovenske variante
         def score_street(phrase: str, street_tok: str) -> float:
             if slovenian_variant_equivalent(phrase, street_tok):
                 return 1.0
@@ -739,28 +611,14 @@ Samostojno vprašanje:"""
         stanje = self.zgodovina_seje[session_id]['stanje']
         zgodovina = self.zgodovina_seje[session_id]['zgodovina']
 
-        # PREVERI KATEGORIJE PRED PREOBLIKOVANJEM
-        vprasanje_lower = uporabnikovo_vprasanje.lower()
-        print(f"🔍 DEBUG: vprasanje_lower = '{vprasanje_lower}'")
-        
-        # Preveri če gre za jedilnik/malico
-        jedilnik_keywords = ["malica", "malico", "kosilo", "kosila", "jedilnik", "jedilnika", "hrana", "hrane", "meni", "menija"]
-        matches = [word for word in jedilnik_keywords if word in vprasanje_lower]
-        print(f"🔍 DEBUG: jedilnik matches = {matches}")
-        
-        if any(word in vprasanje_lower for word in jedilnik_keywords):
-            print("🍽️ ZAZNANO: Jedilnik vprašanje!")
-            odgovor = obravnavaj_jedilnik(uporabnikovo_vprasanje, self.collection)
-            print(f"📝 JEDILNIK ODGOVOR: {odgovor[:100]}...")
-        elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_ODPADKI) or stanje.get('namen') == 'odpadki':
-            pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
+        pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
+        vprasanje_lower = pametno_vprasanje.lower()
+
+        if any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_ODPADKI) or stanje.get('namen') == 'odpadki':
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
         elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_PROMET):
             odgovor = self.preveri_zapore_cest()
         else:
-            pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
-            vprasanje_lower = pametno_vprasanje.lower()
-
             rezultati_iskanja = self.collection.query(
                 query_texts=[vprasanje_lower],
                 n_results=5,
@@ -797,8 +655,8 @@ Samostojno vprašanje:"""
             )
             odgovor = response.choices[0].message.content
 
-        # **NOVA LOGIKA ZA KONTAKT**: če uporabnik sprašuje po kontaktu, ne dajemo osebnih imen ampak splošni občinski
-        contact_query = bool(re.search(r'\b(kontakt|telefon|številka|stevilka)\b', uporabnikovo_vprasanje.lower()))
+        # **NOVA LOGIKA ZA KONTAKT**: če uporabnik sprašuje po kontaktu, ne dajamo osebnih imen ampak splošni občinski
+        contact_query = bool(re.search(r'\b(kontakt|telefon|številka|stevilka)\b', pametno_vprasanje.lower()))
         if contact_query:
             # znebimo se osebnih imen kot "mag. Karmen Kotnik" in morebitnih emailov
             odgovor = re.sub(r'(?i)mag\.?\s*karmen\s+kotnik', 'občina Rače-Fram', odgovor)
@@ -819,44 +677,3 @@ Samostojno vprašanje:"""
         self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
         return odgovor
 
-
-if __name__ == "__main__":
-    import sys
-    
-    print("Inicializacija Virtualnega župana...")
-    zupan = VirtualniZupan()
-    
-    # Test če dela
-    print("Testiram povezavo...")
-    zupan.nalozi_bazo()
-    
-    if not zupan.collection:
-        print("❌ NAPAKA: Ne morem naložiti baze!")
-        sys.exit(1)
-    
-    print(f"✅ Sistem pripravljen! ({zupan.collection.count()} dokumentov)")
-    print("\nVpišite vprašanje ali 'quit' za izhod.\n")
-    
-    session_id = "cli_test"
-    
-    while True:
-        try:
-            vprasanje = input("> ").strip()
-            
-            if not vprasanje:
-                continue
-                
-            if vprasanje.lower() in ['quit', 'exit', 'q']:
-                print("Nasvidenje!")
-                break
-            
-            odgovor = zupan.odgovori(vprasanje, session_id)
-            print("\n" + "="*50)
-            print(odgovor)
-            print("="*50 + "\n")
-            
-        except KeyboardInterrupt:
-            print("\nNasvidenje!")
-            break
-        except Exception as e:
-            print(f"Napaka: {e}")
