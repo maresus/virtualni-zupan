@@ -729,28 +729,6 @@ Samostojno vprašanje:"""
             return "\n\n".join(unique) if unique else "Žal mi ni uspelo najti ustreznega urnika."
 
     def odgovori(self, uporabnikovo_vprasanje: str, session_id: str):
-    # Preverimo ali je to enhanced prompt s kontekstom
-    if "KONTEKST POGOVORA" in uporabnikovo_vprasanje or "NOVO VPRAŠANJE:" in uporabnikovo_vprasanje:
-        print("DEBUG: Detected enhanced prompt with conversation history")
-        
-        # Pošljimo celoten enhanced prompt direktno v LLM
-        prompt_za_llm = f"""Ti si virtualni župan občine Rače-Fram.
-        
-{uporabnikovo_vprasanje}
-
-Odgovori kot pravi župan - osebno, z razumevanjem konteksta iz prejšnjih vprašanj."""
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt_za_llm}],
-                temperature=0.1,
-                max_tokens=800
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(f"Error with enhanced prompt: {e}")
-            # Fall back to normal processing
         self.nalozi_bazo()
         if not self.collection:
             return "Oprostite, moja baza znanja trenutno ni na voljo."
