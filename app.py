@@ -93,14 +93,24 @@ def is_short_followup_question(question):
         'kaj v', 'kako v', 'kdaj v', 'kje v', 
         'kaj za', 'kako za', 'kdaj za',
         'kaj o', 'kako o', 'kdaj o',
-        'oš rače', 'oš fram', 'osnovni šoli'
+        'oš rače', 'oš fram', 'osnovni šoli',
+        'bistriška', 'bistriski', 'bistriska',  # DODANO
+        'mlinska', 'framska', 'grajski',       # DODANO
+        'kaj tam', 'kaj pri', 'kaj na'         # DODANO
+    ]
+    
+    # Lokacijske besede brez konteksta
+    location_only = [
+        'bistriška cesta', 'mlinska cesta', 'framska cesta', 
+        'grajski trg', 'mariborska cesta'
     ]
     
     # Check if question is short and contains follow-up patterns
     word_count = len(question.split())
     contains_pattern = any(pattern in question_lower for pattern in followup_patterns)
+    contains_location = any(loc in question_lower for loc in location_only)
     
-    return word_count <= 4 or contains_pattern
+    return word_count <= 4 or contains_pattern or contains_location
 
 @app.route('/')
 def home():

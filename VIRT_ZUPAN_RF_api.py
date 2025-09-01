@@ -70,16 +70,49 @@ def fuzzy_match(a: str, b: str, threshold: float = 0.8) -> bool:
     return ratio >= threshold
 
 def slovenian_variant_equivalent(a: str, b: str) -> bool:
-    """
-    Heuristika za slovenske fleksijske variante (npr. mlinski <-> mlinska, cesta <-> cesti).
-    """
     a_n = normalize_text(a)
     b_n = normalize_text(b)
+    
     if a_n == b_n:
         return True
-    if len(a_n) > 1 and len(b_n) > 1:
-        if a_n[:-1] == b_n[:-1] and {a_n[-1], b_n[-1]} <= {"a", "i", "e", "o", "u"}:
+    
+    # DODAJ TA DEL - odstrani generične besede
+    generic_words = {"cesta", "ulica", "pot", "trg"}
+    
+    # Očisti generične besede za primerjanje
+    a_clean = " ".join(word for word in a_n.split() if word not in generic_words).strip()
+    b_clean = " ".join(word for word in b_n.split() if word not in generic_words).strip()
+    
+    known_variants = {
+    # Bistriška cesta variante
+    frozenset(["bistriska", "bistriski", "bistriška", "bistriške", "bistriske"]),
+    # Mlinska cesta variante  
+    frozenset(["mlinska", "mlinski", "mlinsko", "mlinske"]),
+    # Framska cesta variante
+    frozenset(["framska", "framski", "framsko", "framske"]),  # <- DODAJTE "framski"
+    # Grajski trg variante
+    frozenset(["grajski", "grajska", "grajsko", "grajske"])
+}
+    
+    # Preveri če sta obe besedi v istem setu variant (UPORABI OČIŠČENE)
+    for variant_set in known_variants:
+        if a_clean in variant_set and b_clean in variant_set:
             return True
+    
+    
+    # Splošna fleksijska heuristika - končnice
+    if len(a_n) > 3 and len(b_n) > 3:
+        # Če se ujemata v prvih 75% znakov
+        min_len = min(len(a_n), len(b_n))
+        stem_len = int(min_len * 0.75)
+        if a_n[:stem_len] == b_n[:stem_len]:
+            # In končnici sta slovenske
+            endings = {"a", "i", "e", "o", "u", "ih", "imi", "ega", "emu"}
+            a_end = a_n[stem_len:]
+            b_end = b_n[stem_len:]
+            if a_end in endings and b_end in endings:
+                return True
+    
     return False
 
 def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.85) -> bool:
@@ -312,6 +345,7 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
     print(f"❌ Ni najden točen podatek za {school} na {target_date.strftime('%d.%m.%Y')}")
     
     return f"Žal nimam podatkov o malici za **{school}** na datum **{target_date.strftime('%d.%m.%Y')}**.\n\nPoskusite:\n- Preveriti ali je datum pravilen\n- Kontaktirati šolo direktno\n- Vprašati za drug datum"
+
 class VirtualniZupan:
     def __init__(self):
         print("Inicializacija razreda VirtualniZupan (Verzija 34.1 - odpadki izboljšano)...")
@@ -471,8 +505,44 @@ Samostojno vprašanje:"""
                 return datum.strftime('%d.%m.%Y')
         return None
 
+    def filter_recent_documents(self, query, n_results=5):
+        """
+        Filtrira dokumente glede na aktualnost za občutljive poizvedbe
+        """
+        current_year = datetime.now().year
+        
+        # Ključne besede ki zahtevajo aktualne podatke
+        temporal_keywords = [
+            'žepnina', 'štipendija', 'razpis', 'vloga', 'prijavnica',
+            'rok', 'datum', 'termin', 'uradne ure', 'kontakt',
+            'naslednji', 'prihodnji', 'trenutno', 'aktualno'
+        ]
+        
+        needs_recent = any(keyword in normalize_text(query) for keyword in temporal_keywords)
+        
+        if needs_recent:
+            # Poskusi najti dokumente za trenutno leto
+            try:
+                results = self.collection.query(
+                    query_texts=[query],
+                    n_results=n_results,
+                    where={"leto": {"$gte": current_year}}  # Predpostavka da imate leto v metadatah
+                )
+                if results['documents'] and results['documents'][0]:
+                    return results
+            except:
+                pass  # Če ni leto v metadatah, nadaljuj normalno
+        
+        # Običajno iskanje
+        return self.collection.query(
+            query_texts=[query],
+            n_results=n_results
+        )
+
     def obravnavaj_odvoz_odpadkov(self, uporabnikovo_vprasanje, session_id):
         print("-> Kličem specialista za odpadke...")
+        if session_id not in self.zgodovina_seje:
+            self.zgodovina_seje[session_id] = {'zgodovina': [], 'stanje': {}}
         stanje = self.zgodovina_seje[session_id].get('stanje', {})
         vprasanje_za_iskanje = (stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje).strip()
         vprasanje_norm = normalize_text(vprasanje_za_iskanje)
@@ -761,11 +831,9 @@ Samostojno vprašanje:"""
             pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
             vprasanje_lower = pametno_vprasanje.lower()
 
-            rezultati_iskanja = self.collection.query(
-                query_texts=[vprasanje_lower],
-                n_results=5,
-                include=["documents", "metadatas"]
-            )
+            # UPORABI IZBOLJŠANO ISKANJE NAMESTO OBIČAJNEGA
+            rezultati_iskanja = self.filter_recent_documents(vprasanje_lower)
+            
             kontekst_baza = ""
             if rezultati_iskanja.get('documents'):
                 for doc, meta in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0]):
@@ -780,14 +848,17 @@ Samostojno vprašanje:"""
 
             now = datetime.now()
             prompt_za_llm = (
-                f"Ti si 'Virtualni župan občine Rače-Fram'.\n"
-                f"DIREKTIVA #1 (VAROVALKA ZA DATUME): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.\n"
+                "Ti si 'Virtualni župan občine Rače-Fram'.\n"
+                f"KRITIČNA DIREKTIVA - DATUM FILTER: Danes je {now.strftime('%d.%m.%Y')}. "
+                f"POPOLNOMA IGNORIRAJ vse podatke, dokumente, informacije za leto 2024 ali starejše. "
+                f"NIKOLI ne omenjaj letnic 2024, 2023, 2022 ali katerekoli starejše v svojem odgovoru. "
+                f"Če dokument vsebuje zastarele datume, RECI: 'Za aktualne podatke za leto 2025 se obrnite na občino.'\n"
                 "DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.\n"
                 "DIREKTIVA #3 (POVEZAVE): Če najdeš URL, ga MORAŠ vključiti v klikljivi obliki: [Ime vira](URL).\n"
                 "DIREKTIVA #4 (SPECIFIČNOST): Če ne najdeš specifičnega podatka (npr. 'kontakt'), NE ponavljaj splošnih informacij. Raje reci: \"Žal nimam specifičnega kontakta za to temo.\"\n\n"
                 f"--- KONTEKST ---\n{kontekst_baza}---\n"
                 f"VPRAŠANJE: \"{uporabnikovo_vprasanje}\"\n"
-                "ODGOVOR:"
+                 "ODGOVOR:"
             )
 
             response = self.openai_client.chat.completions.create(
