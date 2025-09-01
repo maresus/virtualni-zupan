@@ -191,6 +191,13 @@
             color: #155724;
         }
 
+        .session-info {
+            font-size: 0.8rem;
+            color: #666;
+            text-align: center;
+            margin-top: 0.5rem;
+        }
+
         @media (max-width: 768px) {
             .container {
                 margin: 1rem;
@@ -249,9 +256,20 @@
         <div class="status online">
             🟢 Sistem je online in pripravljen za uporabo
         </div>
+        
+        <div class="session-info" id="sessionInfo">
+            Session: Inicializacija...
+        </div>
     </div>
 
     <script>
+        // Generate unique session ID for this browser tab
+        let sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        console.log('🔗 Session ID:', sessionId);
+        
+        // Update session info in UI
+        document.getElementById('sessionInfo').textContent = 'Session: ' + sessionId.substr(0, 20) + '...';
+
         function setQuestion(question) {
             document.getElementById('questionInput').value = question;
             askQuestion();
@@ -279,15 +297,20 @@
             askButton.disabled = true;
 
             try {
+                console.log('🚀 Sending request with Session ID:', sessionId);
+                
                 const response = await fetch('/ask', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
+                        'X-Session-ID': sessionId  // Send session ID with request
                     },
                     body: JSON.stringify({ question: question })
                 });
 
                 const data = await response.json();
+                
+                console.log('📨 Response received:', data.status, data.category || '');
 
                 // Add bot response
                 const botMessage = document.createElement('div');
@@ -295,7 +318,13 @@
                 botMessage.innerHTML = formatAnswer(data.answer || 'Oprostite, prišlo je do napake.');
                 chatContainer.appendChild(botMessage);
 
+                // Show session continuity info if available
+                if (data.session_id) {
+                    console.log('✅ Session continued:', data.session_id);
+                }
+
             } catch (error) {
+                console.error('❌ Request failed:', error);
                 const errorMessage = document.createElement('div');
                 errorMessage.className = 'message bot-message';
                 errorMessage.textContent = 'Oprostite, prišlo je do napake pri povezavi. Poskusite kasneje.';
@@ -319,6 +348,11 @@
 
         // Auto-focus input
         document.getElementById('questionInput').focus();
+        
+        // Show ready message
+        setTimeout(() => {
+            console.log('🎯 Virtual Mayor ready with session:', sessionId);
+        }, 1000);
     </script>
 </body>
 </html>
