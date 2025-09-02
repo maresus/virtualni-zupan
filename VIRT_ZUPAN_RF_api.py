@@ -84,21 +84,24 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
     b_clean = " ".join(word for word in b_n.split() if word not in generic_words).strip()
     
     known_variants = {
-    # Bistriška cesta variante
-    frozenset(["bistriska", "bistriski", "bistriška", "bistriške", "bistriske"]),
-    # Mlinska cesta variante  
-    frozenset(["mlinska", "mlinski", "mlinsko", "mlinske"]),
-    # Framska cesta variante
-    frozenset(["framska", "framski", "framsko", "framske"]),  # <- DODAJTE "framski"
-    # Grajski trg variante
-    frozenset(["grajski", "grajska", "grajsko", "grajske"])
-}
+        # Bistriška cesta variante
+        frozenset(["bistriska", "bistriski", "bistriška", "bistriške", "bistriske"]),
+        # Mlinska cesta variante  
+        frozenset(["mlinska", "mlinski", "mlinsko", "mlinske"]),
+        # Framska cesta variante
+        frozenset(["framska", "framski", "framsko", "framske"]),
+        # Grajski trg variante
+        frozenset(["grajski", "grajska", "grajsko", "grajske"]),
+        # Pod terasami variante
+        frozenset(["terasami", "terase", "terasa", "terasah"]),
+        # Turnerjeva variante
+        frozenset(["turnerjeva", "turnerjevi", "turnerjev"])
+    }
     
     # Preveri če sta obe besedi v istem setu variant (UPORABI OČIŠČENE)
     for variant_set in known_variants:
         if a_clean in variant_set and b_clean in variant_set:
             return True
-    
     
     # Splošna fleksijska heuristika - končnice
     if len(a_n) > 3 and len(b_n) > 3:
@@ -114,6 +117,48 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
                 return True
     
     return False
+
+def has_explicit_location(text: str) -> bool:
+    """Preveri ali besedilo vsebuje eksplicitno lokacijo"""
+    text_norm = normalize_text(text)
+    
+    # Ključne fraze ki kažejo na specifično lokacijo
+    explicit_location_phrases = [
+        "pod terasami", "pri terasami", "na terasami", "terasami",
+        "na bistriški", "bistriška cesta", "bistriški cesti",
+        "na turnerjevi", "turnerjeva ulica", "turnerjevi ulici",
+        "na framski", "framska cesta", "framski cesti",
+        "na mlinski", "mlinska cesta", "mlinski cesti",
+        "grajski trg", "pri grajskem", "na grajskem",
+        "mariborska cesta", "na mariborski",
+        "ptujska cesta", "na ptujski"
+    ]
+    
+    # Preveri če katera od fraz obstaja v besedilu
+    return any(phrase in text_norm for phrase in explicit_location_phrases)
+
+def extract_location_from_text(text: str) -> str:
+    """Ekstraktira lokacijo iz besedila"""
+    text_norm = normalize_text(text)
+    
+    # Slovar znanih lokacij z njihovimi variantami
+    location_map = {
+        "pod terasami": ["pod terasami", "pri terasami", "na terasami", "terasami", "terasa", "terase"],
+        "bistriška cesta": ["bistriška", "bistriški", "bistriska", "na bistriški", "bistriška cesta"],
+        "turnerjeva ulica": ["turnerjeva", "turnerjevi", "turnerjev", "na turnerjevi", "turnerjeva ulica"],
+        "framska cesta": ["framska", "framski", "na framski", "framska cesta"],
+        "mlinska cesta": ["mlinska", "mlinski", "na mlinski", "mlinska cesta"],
+        "grajski trg": ["grajski", "grajska", "pri grajskem", "na grajskem", "grajski trg"],
+        "mariborska cesta": ["mariborska", "na mariborski", "mariborska cesta"],
+        "ptujska cesta": ["ptujska", "na ptujski", "ptujska cesta"]
+    }
+    
+    # Poišči ujemanje
+    for canonical_name, variants in location_map.items():
+        if any(variant in text_norm for variant in variants):
+            return canonical_name
+    
+    return ""
 
 def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float = 0.85) -> bool:
     """
@@ -348,7 +393,7 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
 
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 34.1 - odpadki izboljšano)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 34.2 - popravljen kontekst)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.zgodovina_seje = {}
@@ -378,9 +423,17 @@ class VirtualniZupan:
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora, zadnje_vprasanje):
         if not zgodovina_pogovora:
             return zadnje_vprasanje
+            
+        # KLJUČNI POPRAVEK: Preveri ali novo vprašanje vsebuje eksplicitno lokacijo
+        if has_explicit_location(zadnje_vprasanje):
+            print("-> Nova eksplicitna lokacija zaznana, ne dodajam konteksta iz zgodovine")
+            return zadnje_vprasanje
+            
         print("-> Kličem specialista za spomin...")
         zgodovina_str = "\n".join([f"Uporabnik: {q}\nAsistent: {a}" for q, a in zgodovina_pogovora])
         prompt = f"""Tvoja naloga je, da glede na zgodovino pogovora preoblikuješ novo vprašanje v samostojno vprašanje. Bodi kratek in jedrnat.
+
+POMEMBNO: Če novo vprašanje že vsebuje lokacijo (kot "pod terasami", "na bistriški", "turnerjeva"), ne dodajaj druge lokacije iz zgodovine!
 
 Primer 1:
 Zgodovina:
@@ -395,11 +448,20 @@ Uporabnik: kaj je za malico 1.9?
 Asistent: Za malico je francoski rogljič.
 Novo vprašanje: "kaj pa naslednji dan?"
 Samostojno vprašanje: "kaj je za malico 2.9?"
+
+Primer 3 (POMEMBNO):
+Zgodovina:
+Uporabnik: kdaj je odvoz papirja na turnerjevi?
+Asistent: Odvoz papirja je...
+Novo vprašanje: "kdaj je naslednji odvoz rumene kante pod terasami"
+Samostojno vprašanje: "kdaj je naslednji odvoz rumene kante pod terasami" (BREZ dodajanja "turnerjeva")
+
 ---
 Zgodovina:
 {zgodovina_str}
 Novo vprašanje: "{zadnje_vprasanje}"
 Samostojno vprašanje:"""
+        
         try:
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o-mini",
@@ -408,6 +470,15 @@ Samostojno vprašanje:"""
                 max_tokens=100
             )
             preoblikovano = response.choices[0].message.content.strip().replace('"', '')
+            
+            # DODATNA VAROVALKA: Če preoblikovano vprašanje vsebuje novo lokacijo, uporabi originalno
+            original_location = extract_location_from_text(zadnje_vprasanje)
+            transformed_location = extract_location_from_text(preoblikovano)
+            
+            if original_location and transformed_location and original_location != transformed_location:
+                print(f"-> OPOZORILO: Zaznana mešanja lokacij ({original_location} vs {transformed_location}), uporabim originalno vprašanje")
+                return zadnje_vprasanje
+            
             print(f"Originalno: '{zadnje_vprasanje}' -> Preoblikovano: '{preoblikovano}'")
             return preoblikovano
         except Exception:
@@ -544,6 +615,12 @@ Samostojno vprašanje:"""
         if session_id not in self.zgodovina_seje:
             self.zgodovina_seje[session_id] = {'zgodovina': [], 'stanje': {}}
         stanje = self.zgodovina_seje[session_id].get('stanje', {})
+        
+        # KLJUČNI POPRAVEK: Če vprašanje vsebuje eksplicitno lokacijo, POČISTI STANJE
+        if has_explicit_location(uporabnikovo_vprasanje):
+            print("-> Zaznana eksplicitna lokacija, počistim stanje seje")
+            stanje.clear()  # Odstrani vse prejšnje kontekstne podatke
+        
         vprasanje_za_iskanje = (stanje.get('izvirno_vprasanje', '') + " " + uporabnikovo_vprasanje).strip()
         vprasanje_norm = normalize_text(vprasanje_za_iskanje)
 
@@ -930,4 +1007,4 @@ if __name__ == "__main__":
             print("\nNasvidenje!")
             break
         except Exception as e:
-            print(f"Napaka: {e}")
+            print(f"Napka: {e}")
