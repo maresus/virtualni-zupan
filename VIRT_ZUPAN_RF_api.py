@@ -393,7 +393,7 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
 
 class VirtualniZupan:
     def __init__(self):
-        print("Inicializacija razreda VirtualniZupan (Verzija 34.2 - popravljen kontekst)...")
+        print("Inicializacija razreda VirtualniZupan (Verzija 34.3 - končni popravki)...")
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.collection = None
         self.zgodovina_seje = {}
@@ -605,6 +605,26 @@ Samostojno vprašanje:"""
                 pass  # Če ni leto v metadatah, nadaljuj normalno
         
         # Običajno iskanje
+        return self.collection.query(
+            query_texts=[query],
+            n_results=n_results
+        )
+
+    def priority_search(self, query, n_results=5):
+        """Iskanje ki upošteva prioriteto dokumentov"""
+        # Najprej poiščimo high priority dokumente
+        try:
+            high_priority = self.collection.query(
+                query_texts=[query],
+                n_results=n_results,
+                where={"priority": "high"}
+            )
+            if high_priority['documents'] and high_priority['documents'][0]:
+                return high_priority
+        except:
+            pass
+        
+        # Če ni high priority, običajno iskanje
         return self.collection.query(
             query_texts=[query],
             n_results=n_results
@@ -899,6 +919,14 @@ Samostojno vprašanje:"""
             print("🍽️ ZAZNANO: Jedilnik vprašanje!")
             odgovor = obravnavaj_jedilnik(uporabnikovo_vprasanje, self.collection)
             print(f"📝 JEDILNIK ODGOVOR: {odgovor[:100]}...")
+        elif any(word in vprasanje_lower for word in ["uradne ure", "odprt", "odprto", "krajevni urad"]):
+            print("🏢 ZAZNANO: Uradne ure vprašanje!")
+            if "ponedeljek" in vprasanje_lower or ("kaj pa" in vprasanje_lower and any("ponedel" in str(item) for item in zgodovina)):
+                odgovor = "**Krajevni urad Rače** je ob ponedeljkih odprt:\n\n- **8:00-12:00**\n- **13:00-14:30**\n\nZa več informacij pokličite 02 609 60 10."
+            elif "sreda" in vprasanje_lower:
+                odgovor = "**Krajevni urad Rače** je ob sredah odprt:\n\n- **8:00-12:00**\n- **13:00-17:00**\n\nZa več informacij pokličite 02 609 60 10."
+            else:
+                odgovor = "**Krajevni urad Rače** delovni čas:\n\n**Ponedeljek:**\n- 8:00-12:00\n- 13:00-14:30\n\n**Sreda:**\n- 8:00-12:00\n- 13:00-17:00\n\nZa več informacij pokličite 02 609 60 10."
         elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_ODPADKI) or stanje.get('namen') == 'odpadki':
             pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
             odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
@@ -909,7 +937,7 @@ Samostojno vprašanje:"""
             vprasanje_lower = pametno_vprasanje.lower()
 
             # UPORABI IZBOLJŠANO ISKANJE NAMESTO OBIČAJNEGA
-            rezultati_iskanja = self.filter_recent_documents(vprasanje_lower)
+            rezultati_iskanja = self.priority_search(vprasanje_lower)
             
             kontekst_baza = ""
             if rezultati_iskanja.get('documents'):
@@ -935,7 +963,7 @@ Samostojno vprašanje:"""
                 "DIREKTIVA #4 (SPECIFIČNOST): Če ne najdeš specifičnega podatka (npr. 'kontakt'), NE ponavljaj splošnih informacij. Raje reci: \"Žal nimam specifičnega kontakta za to temo.\"\n\n"
                 f"--- KONTEKST ---\n{kontekst_baza}---\n"
                 f"VPRAŠANJE: \"{uporabnikovo_vprasanje}\"\n"
-                 "ODGOVOR:"
+                "ODGOVOR:"
             )
 
             response = self.openai_client.chat.completions.create(
@@ -1007,4 +1035,4 @@ if __name__ == "__main__":
             print("\nNasvidenje!")
             break
         except Exception as e:
-            print(f"Napka: {e}")
+            print(f"Napaka: {e}")
