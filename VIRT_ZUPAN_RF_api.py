@@ -17,14 +17,11 @@ load_dotenv(os.path.join(BASE_DIR, '..', '.env'))
 
 # --- Pametno določanje poti glede na okolje ---
 if os.getenv('ENV_TYPE') == 'production':
-    # Produkcijsko okolje na Renderju
     DATA_DIR = "/data"
     print("Zaznano produkcijsko okolje (Render). Poti so nastavljene na /data.")
 else:
-    # Lokalno razvojno okolje
     DATA_DIR = os.path.join(BASE_DIR, "data")
     print("Zaznano lokalno okolje. Poti so nastavljene relativno.")
-    # Zagotovimo, da lokalna mapa obstaja
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
 
@@ -76,7 +73,6 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
     
     generic_words = {"cesta", "ulica", "pot", "trg"}
     
-    # Očisti generične besede za primerjanje
     a_clean = " ".join(word for word in a_n.split() if word not in generic_words).strip()
     b_clean = " ".join(word for word in b_n.split() if word not in generic_words).strip()
     
@@ -89,12 +85,10 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
         frozenset(["turnerjeva", "turnerjevi", "turnerjev"])
     }
     
-    # Preveri če sta obe besedi v istem setu variant
     for variant_set in known_variants:
         if a_clean in variant_set and b_clean in variant_set:
             return True
     
-    # Splošna fleksijska heuristika - končnice
     if len(a_n) > 3 and len(b_n) > 3:
         min_len = min(len(a_n), len(b_n))
         stem_len = int(min_len * 0.75)
@@ -132,7 +126,6 @@ def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float =
             return False
     return True
 
-# canonicalne različice tipov odpadkov z možnimi variacijami
 WASTE_TYPE_VARIANTS = {
     "Biološki odpadki": [
         "bioloski odpadki", "bioloskih odpakov", "bioloski", "bioloskih", "bio", "biološki odpadki",
@@ -158,7 +151,6 @@ WASTE_TYPE_VARIANTS = {
 def get_canonical_waste(text: str):
     norm = normalize_text(text)
 
-    # heuristike / kolokvialno
     if ("rumen" in norm or "rumena" in norm) and ("kanta" in norm or "kante" in norm):
         return "Odpadna embalaža"
     if "komunaln" in norm and "odpadk" in norm:
@@ -172,14 +164,12 @@ def get_canonical_waste(text: str):
     if "embal" in norm:
         return "Odpadna embalaža"
 
-    # direktno ujemanje variant
     for canonical, variants in WASTE_TYPE_VARIANTS.items():
         if normalize_text(canonical) in norm:
             return canonical
         for v in variants:
             if normalize_text(v) in norm:
                 return canonical
-    # fuzzy fallback
     for canonical, variants in WASTE_TYPE_VARIANTS.items():
         for v in variants:
             if SequenceMatcher(None, norm, normalize_text(v)).ratio() >= 0.85:
@@ -202,23 +192,18 @@ def extract_locations_from_naselja(naselja_field: str):
     else:
         for chunk in naselja_field.split(','):
             parts.append(chunk.strip())
-    # normalize and dedupe
     return list({normalize_text(p) for p in parts if p})
 
 def obravnavaj_jedilnik(vprasanje: str, collection):
-    """Izboljšana obdelava za jedilnike/malice - vrne SAMO iskani datum"""
     vprasanje_lower = vprasanje.lower()
     
-    # Določi šolo
-    school = "OŠ Rače"  # Privzeto
+    school = "OŠ Rače"
     if "fram" in vprasanje_lower:
         school = "OŠ Fram"
     
-    # Določi datum
     today = datetime.now()
     target_date = None
     
-    # Preveri ali je v vprašanju numerični datum (2.9, 1.9, itd.)
     date_match = re.search(r'(\d{1,2})\.(\d{1,2})', vprasanje_lower)
     if date_match:
         dan = int(date_match.group(1))
@@ -256,11 +241,10 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
             days_ahead += 7
         target_date = today + timedelta(days=days_ahead)
     else:
-        target_date = today  # Danes
+        target_date = today
 
     print(f"🗓️ DEBUG: Iščem {school} za datum {target_date.strftime('%d.%m.%Y')}")
 
-    # STRATEGIJA 1: Poskuši iskanje po metadatah
     try:
         date_formats = [
             target_date.strftime('%Y-%m-%d'),
@@ -287,7 +271,6 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
     except Exception as e:
         print(f"Metadata search error: {e}")
     
-    # STRATEGIJA 2: Semantic search s STROGIM datumskim filterjem
     try:
         search_queries = [
             f"malica {target_date.strftime('%d.%m')} {school}",
@@ -324,7 +307,6 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
     except Exception as e:
         print(f"Semantic search error: {e}")
     
-    # STRATEGIJA 3: Če ni našel točnega datuma, NE vrni ničesar
     print(f"❌ Ni najden točen podatek za {school} na {target_date.strftime('%d.%m.%Y')}")
     
     return f"Žal nimam podatkov o malici za **{school}** na datum **{target_date.strftime('%d.%m.%Y')}**.\n\nPoskusite:\n- Preveriti ali je datum pravilen\n- Kontaktirati šolo direktno\n- Vprašati za drug datum"
@@ -337,8 +319,6 @@ class VirtualniZupan:
         self.zgodovina_seje = {}
         self._nap_access_token = None
         self._nap_token_expiry = None
-        
-        # Cache za JSONL podatke
         self.jsonl_cache = {}
 
     def nalozi_bazo(self):
@@ -362,10 +342,8 @@ class VirtualniZupan:
             print(f"Napaka pri beleženju pogovora: {e}")
 
     def load_jsonl_data(self, filename):
-        """Direktno preberi JSONL datoteko z cache sistemom"""
         cache_key = filename
         
-        # Preveri cache
         if cache_key in self.jsonl_cache:
             return self.jsonl_cache[cache_key]
         
@@ -384,7 +362,6 @@ class VirtualniZupan:
                                 print(f"JSON error in {filename} line {line_num + 1}: {e}")
                                 continue
                         
-                # Cache podatke
                 self.jsonl_cache[cache_key] = data
                 print(f"📂 Naloženo {len(data)} zapisov iz {filename}")
                 
@@ -396,28 +373,23 @@ class VirtualniZupan:
         return data
 
     def get_health_data_direct(self, query_lower=""):
-        """Direktno pridobi zdravstvene podatke iz zdravstvo.jsonl - BREZ PODVAJANJA"""
         health_data = self.load_jsonl_data("zdravstvo.jsonl")
         
         if not health_data:
             return "Žal nimam dostopa do zdravstvenih podatkov."
         
-        # Klasificiraj tip poizvedbe s strožjimi kriteriji
         if any(word in query_lower for word in ["osebni", "splošna", "družinski", "ambulanta splošne"]):
-            # Samo osebni zdravniki - izključno splošna medicina
             doctors = [item for item in health_data if 
                       "splošna medicina" in item.get("text", "").lower() and
                       not any(zobni in item.get("text", "").lower() for zobni in ["zobni", "zobna", "dentalna"])]
             title = "Osebni zdravniki (splošna medicina) v občini Rače-Fram:\n\n"
             
         elif any(word in query_lower for word in ["zobni", "zobozdravnik", "dentalna", "zobna"]):
-            # Samo zobozdravniki - POPRAVLJEN FILTER
             doctors = [item for item in health_data if 
                       any(word in item.get("text", "").lower() for word in ["zobni", "zobna", "dentalna", "madens", "zobozdravstvo"])]
             title = "Zobozdravniki v občini Rače-Fram:\n\n"
             
         else:
-            # Vsi zdravniki (ne patronaža, fizioterapija)
             doctors = [item for item in health_data if 
                       any(word in item.get("text", "").lower() for word in ["dr.", "doktor", "specialistka"]) and
                       not any(word in item.get("text", "").lower() for word in ["patronažna", "fizioterapija", "lekarna"])]
@@ -426,14 +398,12 @@ class VirtualniZupan:
         if not doctors:
             return "Žal nisem našel ustreznih zdravstvenih podatkov."
         
-        # Združi osnovne podatke in urnik za vsakega zdravnika
         doctor_profiles = {}
         
         for item in doctors:
             text = item.get("text", "")
             metadata = item.get("metadata", {})
             
-            # Izvleci ime zdravnika
             doctor_name = None
             
             patterns = [
@@ -454,7 +424,6 @@ class VirtualniZupan:
                 doctor_name = metadata.get("zdravnik") or metadata.get("oseba")
             
             if doctor_name:
-                # Preveri če je že v profilih - ne dodaj duplikata
                 existing_profile = None
                 for existing_name in doctor_profiles.keys():
                     if (normalize_text(doctor_name) in normalize_text(existing_name) or 
@@ -468,7 +437,6 @@ class VirtualniZupan:
                         doctor_profiles[existing_profile]['urnik'] = text
                     continue
                 
-                # Ustvari nov profil
                 doctor_profiles[doctor_name] = {
                     'osnovni_podatki': text if metadata.get('tip') != 'urnik' else None,
                     'urnik': text if metadata.get('tip') == 'urnik' else None,
@@ -482,19 +450,15 @@ class VirtualniZupan:
                 
                 profile = doctor_profiles[doctor_name]
                 
-                # Ekstraktiranje kontaktnih podatkov samo iz osnovnih podatkov
                 if metadata.get('tip') != 'urnik':
-                    # Telefon
                     telefon_match = re.search(r'Telefon:\s*([0-9\/\-\s]+)', text)
                     if telefon_match:
                         profile['telefon'] = telefon_match.group(1).strip()
                     
-                    # Email - popoln email
                     email_match = re.search(r'E-pošta:\s*([a-zA-Z0-9\._-]+@[a-zA-Z0-9\.-]+\.[a-zA-Z]{2,})', text)
                     if email_match:
                         profile['email'] = email_match.group(1).strip()
                     elif re.search(r'E-pošta:\s*([^\s,\.]+)', text):
-                        # Delni email - poskusi rekonstrukcijo
                         partial = re.search(r'E-pošta:\s*([^\s,\.]+)', text).group(1).strip()
                         if 'sebastijan' in partial and '@' not in partial:
                             profile['email'] = 'sebastijan.sketa@zd-mb.si'
@@ -507,11 +471,9 @@ class VirtualniZupan:
                         else:
                             profile['email'] = partial
                     
-                    # Naslov - popoln naslov
                     naslov_match = re.search(r'Naslov:\s*([^\.]+?)(?:\s*\.\s*Telefon|\s*\.\s*GSM|\s*\.\s*E-pošta|\.\s*$|$)', text)
                     if naslov_match:
                         naslov_raw = naslov_match.group(1).strip().rstrip(',.')
-                        # Dopolni naslove
                         if naslov_raw == 'Nova ul':
                             profile['naslov'] = 'Nova ul. 5, Rače'
                         elif naslov_raw == 'Nova ulica 5':
@@ -521,7 +483,6 @@ class VirtualniZupan:
                         else:
                             profile['naslov'] = naslov_raw
                     
-                    # Določi tip storitve
                     if "splošna medicina" in text.lower():
                         profile['storitev'] = "Splošna medicina"
                     elif "zasebna" in text.lower():
@@ -529,7 +490,6 @@ class VirtualniZupan:
                     elif any(word in text.lower() for word in ["zobni", "zobna", "dentalna"]):
                         profile['storitev'] = "Zobozdravstvo"
         
-        # Sestavka končni odgovor - BREZ PODVAJANJA
         response = title
         
         for doctor_name, profile in doctor_profiles.items():
@@ -546,7 +506,6 @@ class VirtualniZupan:
             if profile['lokacija']:
                 response += f"- Lokacija: {profile['lokacija']}\n"
             
-            # Dodaj urnik če obstaja
             if profile['urnik']:
                 urnik_match = re.search(r'Ordinacijski čas[:\s]*(.+)', profile['urnik'], re.IGNORECASE | re.DOTALL)
                 if urnik_match:
@@ -559,7 +518,6 @@ class VirtualniZupan:
         return response
 
     def get_office_hours_direct(self, query_lower=""):
-        """Direktno pridobi uradne ure iz krajevni_urad_aktualno.jsonl"""
         office_data = self.load_jsonl_data("krajevni_urad_aktualno.jsonl")
         
         if not office_data:
@@ -567,7 +525,6 @@ class VirtualniZupan:
         
         response = "**Uradne ure Občine Rače-Fram:**\n\n"
         
-        # Če sprašuje za določen dan
         dan_mapping = {
             "ponedeljek": "ponedeljek", "pon": "ponedeljek",
             "torek": "torek", "tor": "torek", 
@@ -587,7 +544,6 @@ class VirtualniZupan:
             text = item.get("text", "")
             metadata = item.get("metadata", {})
             
-            # Če sprašuje za določen dan
             if asked_day and asked_day in text.lower():
                 response += f"**{asked_day.title()}:** {text}\n"
                 found_specific = True
@@ -600,7 +556,6 @@ class VirtualniZupan:
         return response
 
     def preoblikuj_vprasanje_s_kontekstom(self, zgodovina_pogovora, zadnje_vprasanje):
-        """Preoblikuje vprašanje glede na kontekst pogovora"""
         if not zgodovina_pogovora:
             return zadnje_vprasanje
 
@@ -679,7 +634,6 @@ Samostojno vprašanje:"""
             data_response.raise_for_status()
             vsi_dogodki = data_response.json().get('features', [])
 
-            # ožji lokalni filter: le dogodki, ki omenjajo ključne kraje v občini
             MUNICIPAL_FILTER = {"rače", "fram", "slivnica", "brunšvik", "podova", "morje", "hoče"}
 
             relevantne_zapore_raw = []
@@ -704,7 +658,6 @@ Samostojno vprašanje:"""
             if not relevantne_zapore_raw:
                 return "Po podatkih portala promet.si na območju občine Rače-Fram trenutno ni zabeleženih del na cesti, zapor ali zastojev."
 
-            # deduplikacija: isti cesta + zelo podoben opis
             merged = []
             for z in relevantne_zapore_raw:
                 added = False
@@ -717,7 +670,6 @@ Samostojno vprašanje:"""
                 if not added:
                     merged.append(z)
 
-            # prioriteta: tisti, ki eksplicitno omenjajo "rače" ali "fram" najprej
             def priority_key(z):
                 text = " ".join([z['cesta'], z['opis'], z['imeDogodka']]).lower()
                 if "rače" in text or "fram" in text:
@@ -766,13 +718,9 @@ Samostojno vprašanje:"""
         if not vsi_urniki or not vsi_urniki.get('ids'):
             return "V bazi znanja ni podatkov o urnikih."
 
-        # prepoznaj tip odpadka (kanonično), z dodatno heuristiko za rumene kante
         iskani_tip = get_canonical_waste(vprasanje_norm)
-
-        # ali uporabnik hoče "naslednji"
         contains_naslednji = "naslednji" in vprasanje_norm
 
-        # gradimo stopwords iz tipov, da ne pridejo v lokacijske fraze
         waste_type_stopwords = {normalize_text(k) for k in WASTE_TYPE_VARIANTS.keys()}
         for variants in WASTE_TYPE_VARIANTS.values():
             for v in variants:
@@ -784,14 +732,12 @@ Samostojno vprašanje:"""
 
         raw_tokens = [t for t in re.split(r'[,\s]+', vprasanje_norm) if t and t not in odstrani]
 
-        # zgradi n-gram lokacij (prioriteta večbesednih)
         location_phrases = []
         for size in (3, 2, 1):
             for i in range(len(raw_tokens) - size + 1):
                 phrase = " ".join(raw_tokens[i:i + size])
                 location_phrases.append(phrase)
 
-        # dedupe while preserving order
         seen = set()
         filtered_phrases = []
         for p in location_phrases:
@@ -802,13 +748,11 @@ Samostojno vprašanje:"""
 
         location_phrases = filtered_phrases
 
-        # odstranimo generične enobesedne fraze (npr. "cesta", "ulica")
         generic_single = {"cesta", "cesti", "ulica", "ulici", "pot", "trg", "ob"}
 
         multi_word_phrases = [p for p in location_phrases if len(p.split()) > 1]
         single_word_phrases = [p for p in location_phrases if len(p.split()) == 1 and p not in generic_single]
 
-        # določimo, ali je v vprašanju eksplicitna lokacija
         street_indicators = {"cesta", "ulica", "pot", "trg", "naslov", "pod", "terasami"}
         is_explicit_location = any(len(p.split()) > 1 or any(ind in p for ind in street_indicators) for p in location_phrases)
 
@@ -816,7 +760,6 @@ Samostojno vprašanje:"""
         fuzzy_street_matches = []
         area_matches = []
 
-        # helper za scoring med frazo in uličnim tokenom z upoštevanjem slovenske variante
         def score_street(phrase: str, street_tok: str) -> float:
             if slovenian_variant_equivalent(phrase, street_tok):
                 return 1.0
@@ -834,7 +777,6 @@ Samostojno vprašanje:"""
             full_ratio = SequenceMatcher(None, norm_phrase, norm_street).ratio()
             return max(full_ratio, best_word_ratio * 0.95)
 
-        # faze: najprej multi-word, potem single-word
         phrase_groups = []
         if multi_word_phrases:
             phrase_groups.append(("multi", multi_word_phrases))
@@ -859,7 +801,6 @@ Samostojno vprašanje:"""
                 if not phrases:
                     continue
 
-                # exact match
                 for phrase in phrases:
                     for street_tok in lokacije:
                         if normalize_text(phrase) == normalize_text(street_tok) or slovenian_variant_equivalent(phrase, street_tok):
@@ -882,7 +823,6 @@ Samostojno vprašanje:"""
                 if matched_for_this_doc:
                     break
 
-                # fuzzy match
                 for phrase in phrases:
                     for street_tok in lokacije:
                         sc = score_street(phrase, street_tok)
@@ -904,7 +844,6 @@ Samostojno vprašanje:"""
                     if matched_for_this_doc and phase == "multi":
                         break
 
-            # fallback na območje (samo če ni ulični kandidat za ta dokument)
             has_street_for_doc = any(
                 c['meta'] is meta and ('matched_street' in c) for c in exact_street_matches + fuzzy_street_matches
             )
@@ -926,7 +865,6 @@ Samostojno vprašanje:"""
                             area_matches.append(candidate)
                             break
 
-        # izbira kandidatov po prioriteti
         if exact_street_matches:
             kandidati = exact_street_matches
         elif fuzzy_street_matches:
@@ -935,7 +873,6 @@ Samostojno vprašanje:"""
         else:
             kandidati = area_matches
 
-        # **NOVA LOGIKA**: če je eksplicitna lokacija in ni "naslednji", omeji na ujemanja, ki imajo matched_phrase iz primarnih (najdaljših) fraz
         if is_explicit_location and not contains_naslednji and kandidati:
             primary_phrases = multi_word_phrases if multi_word_phrases else single_word_phrases
             if primary_phrases:
@@ -947,7 +884,6 @@ Samostojno vprašanje:"""
                     max_score = max(c.get('score', 1.0) for c in explicit)
                     kandidati = [c for c in explicit if c.get('score', 1.0) >= max_score - 1e-6]
 
-        # če je eksplicitna lokacija in ni kandidatov, ne fallbackaj
         if is_explicit_location and not kandidati:
             if not iskani_tip and 'caka_na' not in stanje:
                 stanje.update({'caka_na': 'tip', 'namen': 'odpadki', 'izvirno_vprasanje': uporabnikovo_vprasanje})
@@ -970,10 +906,9 @@ Samostojno vprašanje:"""
 
             return "Za navedeno kombinacijo tipa in lokacije žal nisem našel ustreznega urnika."
 
-        # sestavi odgovor
         now = datetime.now()
         if contains_naslednji:
-            best = None  # (datetime, tip, street_or_area)
+            best = None
 
             for info in kandidati:
                 doc_text = info['doc']
@@ -1063,7 +998,6 @@ Samostojno vprašanje:"""
 
         print(f"🔍 DEBUG: vprasanje_lower = '{uporabnikovo_vprasanje.lower()}'")
 
-        # NOVA PRIORITETA: Kontekstni pristop - NAJPREJ preveri "kaj pa..." vprašanja
         vprasanje_lower = uporabnikovo_vprasanje.lower()
         
         if any(phrase in vprasanje_lower for phrase in ["kaj pa", "kdaj pa", "in kaj", "kako pa"]):
@@ -1072,17 +1006,14 @@ Samostojno vprašanje:"""
                 if any(word in zadnje_user_q.lower() for word in ["odvoz", "smeti", "odpadk", "steklo", "papir", "bio", "embal"]):
                     if any(word in vprasanje_lower for word in ["cesta", "ulica", "na ", "v ", "cesti", "ulici"]):
                         print("🔄 KONTEKST: 'kaj pa' cesta -> odvoz odpadkov")
-                        # Prisilno usmeri na odvoz odpadkov
                         pametno_vprasanje = f"kdaj je odvoz stekla {uporabnikovo_vprasanje.lower().replace('kdaj pa', '').replace('kaj pa', '').strip()}"
                         odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
-                        # Shrani in vrni
                         zgodovina.append((uporabnikovo_vprasanje, odgovor))
                         if len(zgodovina) > 4:
                             zgodovina.pop(0)
                         self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
                         return odgovor
 
-        # LAYER 2: Zdravstveni pristop - direktno iz JSONL
         if any(word in vprasanje_lower for word in ["zdravnik", "zdravnica", "osebni zdravnik", "zobozdravnik", "zobni", "ambulanta", "zdravstvo", "ordinacija", "medicina"]):
             print("⚕️ ZAZNANO: Zdravstveno vprašanje - direktno iz JSONL!")
             odgovor = self.get_health_data_direct(vprasanje_lower)
@@ -1092,183 +1023,9 @@ Samostojno vprašanje:"""
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
             return odgovor
 
-        # LAYER 5: Uradne ure - direktno iz JSONL
-        if any(word in vprasanje_lower for word in ["ura", "odprt", "kdaj odprt", "uradne ure", "krajevni urad"]):
-            print("🏢 ZAZNANO: Uradne ure vprašanje - direktno iz JSONL!")
-            odgovor = self.get_office_hours_direct(vprasanje_lower)
-            zgodovina.append((uporabnikovo_vprasanje, odgovor))
-            if len(zgodovina) > 4:
-                zgodovina.pop(0)
-            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-            return odgovor
-
-        # OSTALO: Preoblikovanje vprašanja s kontekstom (za kompleksne pogovore)
-        pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
-        vprasanje_lower = pametno_vprasanje.lower()
-
-        if any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_ODPADKI) or stanje.get('namen') == 'odpadki':
-            odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
-
-        elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_PROMET):
-            odgovor = self.preveri_zapore_cest()
-
-        elif any(word in vprasanje_lower for word in ["malica", "jedilnik", "kosilo", "zajtrk"]):
-            print("🍽️ ZAZNANO: Jedilnik vprašanje")
-            odgovor = obravnavaj_jedilnik(vprasanje_lower, self.collection)
-
-        else:
-            rezultati_iskanja = self.collection.query(
-                query_texts=[vprasanje_lower],
-                n_results=5,
-                include=["documents", "metadatas"]
-            )
-
-            kontekst_baza = ""
-
-            if rezultati_iskanja.get('documents'):
-                for doc, meta in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0]):
-                    kontekst_baza += (
-                        f"--- VIR: {meta.get('source', 'Neznan')}\n"
-                        f"POVEZAVA: {meta.get('source_url', 'Brez')}\n"
-                        f"VSEBINA: {doc}\n\n"
-                    )
-
-            if not kontekst_baza:
-                return "Žal o tem nimam nobenih informacij."
-
-            now = datetime.now()
-
-            prompt_za_llm = (
-                f"Ti si 'Virtualni župan občine Rače-Fram'.\n"
-                f"DIREKTIVA #1 (VAROVALKA ZA DATUME): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.\n"
-                "DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.\n"
-                "DIREKTIVA #3 (POVEZAVE): Če najdeš URL, ga MORAŠ vključiti v klikljivi obliki: [Ime vira](URL).\n"
-                "DIREKTIVA #4 (SPECIFIČNOST): Če ne najdeš specifičnega podatka (npr. 'kontakt'), NE ponavljaj splošnih informacij. Raje reci: \"Žal nimam specifičnega kontakta za to temo.\"\n\n"
-                f"--- KONTEKST ---\n{kontekst_baza}---\n"
-                f"VPRAŠANJE: \"{uporabnikovo_vprasanje}\"\n"
-                "ODGOVOR:"
-            )
-
-            response = self.openai_client.chat.completions.create(
-                model=GENERATOR_MODEL_NAME,
-                messages=[{"role": "user", "content": prompt_za_llm}],
-                temperature=0.0
-            )
-
-            odgovor = response.choices[0].message.content
-
-            # **NOVA LOGIKA ZA KONTAKT**: če uporabnik sprašuje po kontaktu, ne dajamo osebnih imen ampak splošni občinski
-            contact_query = bool(re.search(r'\b(kontakt|telefon|številka|stevilka)\b', pametno_vprasanje.lower()))
-
-            if contact_query:
-                # znebimo se osebnih imen kot "mag. Karmen Kotnik" in morebitnih emailov
-                odgovor = re.sub(r'(?i)mag\.?\s*karmen\s+kotnik', 'občina Rače-Fram', odgovor)
-                odgovor = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w+\b', '', odgovor)
-
-                # odstranimo specifične alternative telefonskih številk (npr. 02 609 60 19)
-                odgovor = re.sub(r'\b02[\s\-]*609[\s\-]*60[\s\-]*1[0-9]\b', '', odgovor)
-
-                # pospravimo podvojene prazne vrstice/odvečne presledke
-                odgovor = re.sub(r'\n{2,}', '\n\n', odgovor).strip()
-
-                # zagotovimo splošni kontakt
-                generic_line = "Za več informacij pokličite občino Rače-Fram na 02 609 60 10."
-                if generic_line not in odgovor:
-                    odgovor = odgovor + "\n\n" + generic_line
-
-        zgodovina.append((uporabnikovo_vprasanje, odgovor))
-        if len(zgodovina) > 4:
-            zgodovina.pop(0)
-
-        self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-        return odgovor
-
-
-# TESTIRANJE - avtomatski test ob zagonu
-def test_system():
-    print("\n🧪 TESTIRANJE DIREKTNEGA JSONL DOSTOPA:")
-    print("=" * 50)
-    
-    zupan = VirtualniZupan()
-    zupan.nalozi_bazo()
-    
-    test_questions = [
-        "mamo v občini zobozdravnika?",
-        "kontakte od zdravnikov",
-        "kdaj je odprti krajevni urad rače",
-        "kaj pa ob ponedeljkih",
-        "kdaj je naslednji odvoz rumene kante pod terasami"
-    ]
-    
-    for i, question in enumerate(test_questions, 1):
-        print(f"\n{i}. {question}")
-        print("-" * 40)
-        
-        answer = zupan.odgovori(question, f"test_{i}")
-        print(answer[:200] + ("..." if len(answer) > 200 else ""))
-
-
-# CLI vmesnik
-def main():
-    print("\n" + "=" * 60)
-    print("VIRTUALNI ŽUPAN RAČE-FRAM v35.1")
-    print("Končni popravki - direktni JSONL pristop")
-    print("=" * 60)
-
-    zupan = VirtualniZupan()
-    zupan.nalozi_bazo()
-    
-    # Avtomatski test
-    test_system()
-    
-    print("\n💬 Pripravljen za vprašanja! (vpišite 'konec' za izhod)")
-    print("📊 Statistika: 'stats'\n")
-
-    session_id = f"cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    print("Pozdravljeni! Sem vaš virtualni župan občine Rače-Fram. Lahko me vprašate karkoli o naši občini - od jedilnikov v šolah do odvoza odpadkov, od kontaktnih podatkov do občinskih storitev. Kako vam lahko pomagam?")
-
-    while True:
-        try:
-            question = input("\n> ").strip()
-
-            if not question:
-                continue
-
-            if question.lower() in ['konec', 'exit', 'quit', 'q']:
-                print("\n👋 Nasvidenje!")
-                break
-
-            if question.lower() == 'stats':
-                print(f"\n📊 STATISTIKE:")
-                print(f" • Session ID: {session_id}")
-                print(f" • Cache entries: {len(zupan.jsonl_cache)}")
-                if zupan.collection:
-                    print(f" • Documents in ChromaDB: {zupan.collection.count()}")
-                continue
-
-            # Process actual question
-            print("\n" + "=" * 60)
-            answer = zupan.odgovori(question, session_id)
-            print(answer)
-            print("=" * 60)
-
-        except KeyboardInterrupt:
-            print("\n\n👋 Prekinitev... Nasvidenje!")
-            break
-        except Exception as e:
-            print(f"\n❌ Napaka: {e}")
-            continue
-
-
-if __name__ == "__main__":
-    main()
-
-        # LAYER 3: Kontaktni pristop - direktno iz JSONL (IZBOLJŠANO)
         if any(word in vprasanje_lower for word in ["kontakt", "kontaktiram", "koga", "kdo je odgovoren", "telefon", "mail", "email", "naslov", "zaposleni", "direktor"]):
             print("📞 ZAZNANO: Kontaktno vprašanje - direktno iz JSONL!")
             
-            # Dodatno iskanje specifičnih področij
             field_keywords = {
                 "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis", "poljedelstvo", "agronomija"],
                 "sport": ["telovadnica", "dvorana", "šport", "sport", "rekreacija", "atletika", "športni objekti"],
@@ -1279,7 +1036,6 @@ if __name__ == "__main__":
                 "sociala": ["šolstvo", "zdravstvo", "socialno", "varstvo", "dijaki", "študenti"]
             }
             
-            # Prepoznaj področje
             detected_field = None
             for field, keywords in field_keywords.items():
                 if any(keyword in vprasanje_lower for keyword in keywords):
@@ -1289,7 +1045,6 @@ if __name__ == "__main__":
             if detected_field:
                 print(f"🎯 Zaznano specifično področje: {detected_field}")
                 
-                # Direktno mapiranje na odgovorne osebe
                 field_contacts = {
                     "kmetijstvo": {
                         "name": "Tanja Kosi", 
@@ -1346,7 +1101,6 @@ Za direkten kontakt pokličite glavno številko občine in prosite za povezavo z
                     self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
                     return odgovor
             
-            # Če ni specifično področje, vrni splošne kontakte
             odgovor = """**Splošni kontaktni podatki Občine Rače-Fram:**
 
 📞 **Telefon:** 02 609 60 10
@@ -1361,7 +1115,6 @@ Za direkten kontakt pokličite glavno številko občine in prosite za povezavo z
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
             return odgovor
 
-        # LAYER 4: Šolske poizvedbe - OŠ Rače govorilne ure
         if any(word in vprasanje_lower for word in ["govorilne ure", "govorilnih ur", "govorilne"]) and any(word in vprasanje_lower for word in ["rače", "race"]):
             print("🏫 ZAZNANO: Govorilne ure OŠ Rače!")
             odgovor = """**Govorilne ure v OŠ Rače:**
@@ -1371,3 +1124,167 @@ Za govorilne ure v OŠ Rače je **obvezno predhodno spletno naročanje**.
 🔗 **Povezava za naročanje:** [Govorilne ure OŠ Rače](https://www.osrace.si/?p=1235)
 
 Prosimo, da se naročite vnaprej preko zgornje povezave."""
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            if len(zgodovina) > 4:
+                zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        if any(word in vprasanje_lower for word in ["ura", "odprt", "kdaj odprt", "uradne ure", "krajevni urad"]):
+            print("🏢 ZAZNANO: Uradne ure vprašanje - direktno iz JSONL!")
+            odgovor = self.get_office_hours_direct(vprasanje_lower)
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            if len(zgodovina) > 4:
+                zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        pametno_vprasanje = self.preoblikuj_vprasanje_s_kontekstom(zgodovina, uporabnikovo_vprasanje)
+        vprasanje_lower = pametno_vprasanje.lower()
+
+        if any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_ODPADKI) or stanje.get('namen') == 'odpadki':
+            odgovor = self.obravnavaj_odvoz_odpadkov(pametno_vprasanje, session_id)
+
+        elif any(re.search(r'\b' + re.escape(k) + r'\b', vprasanje_lower) for k in KLJUCNE_BESEDE_PROMET):
+            odgovor = self.preveri_zapore_cest()
+
+        elif any(word in vprasanje_lower for word in ["malica", "jedilnik", "kosilo", "zajtrk"]):
+            print("🍽️ ZAZNANO: Jedilnik vprašanje")
+            odgovor = obravnavaj_jedilnik(vprasanje_lower, self.collection)
+
+        else:
+            rezultati_iskanja = self.collection.query(
+                query_texts=[vprasanje_lower],
+                n_results=5,
+                include=["documents", "metadatas"]
+            )
+
+            kontekst_baza = ""
+
+            if rezultati_iskanja.get('documents'):
+                for doc, meta in zip(rezultati_iskanja['documents'][0], rezultati_iskanja['metadatas'][0]):
+                    kontekst_baza += (
+                        f"--- VIR: {meta.get('source', 'Neznan')}\n"
+                        f"POVEZAVA: {meta.get('source_url', 'Brez')}\n"
+                        f"VSEBINA: {doc}\n\n"
+                    )
+
+            if not kontekst_baza:
+                return "Žal o tem nimam nobenih informacij."
+
+            now = datetime.now()
+
+            prompt_za_llm = (
+                f"Ti si 'Virtualni župan občine Rače-Fram'.\n"
+                f"DIREKTIVA #1 (VAROVALKA ZA DATUME): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.\n"
+                "DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.\n"
+                "DIREKTIVA #3 (POVEZAVE): Če najdeš URL, ga MORAŠ vključiti v klikljivi obliki: [Ime vira](URL).\n"
+                "DIREKTIVA #4 (SPECIFIČNOST): Če ne najdeš specifičnega podatka (npr. 'kontakt'), NE ponavljaj splošnih informacij. Raje reci: \"Žal nimam specifičnega kontakta za to temo.\"\n\n"
+                f"--- KONTEKST ---\n{kontekst_baza}---\n"
+                f"VPRAŠANJE: \"{uporabnikovo_vprasanje}\"\n"
+                "ODGOVOR:"
+            )
+
+            response = self.openai_client.chat.completions.create(
+                model=GENERATOR_MODEL_NAME,
+                messages=[{"role": "user", "content": prompt_za_llm}],
+                temperature=0.0
+            )
+
+            odgovor = response.choices[0].message.content
+
+            contact_query = bool(re.search(r'\b(kontakt|telefon|številka|stevilka)\b', pametno_vprasanje.lower()))
+
+            if contact_query:
+                odgovor = re.sub(r'(?i)mag\.?\s*karmen\s+kotnik', 'občina Rače-Fram', odgovor)
+                odgovor = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w+\b', '', odgovor)
+                odgovor = re.sub(r'\b02[\s\-]*609[\s\-]*60[\s\-]*1[0-9]\b', '', odgovor)
+                odgovor = re.sub(r'\n{2,}', '\n\n', odgovor).strip()
+
+                generic_line = "Za več informacij pokličite občino Rače-Fram na 02 609 60 10."
+                if generic_line not in odgovor:
+                    odgovor = odgovor + "\n\n" + generic_line
+
+        zgodovina.append((uporabnikovo_vprasanje, odgovor))
+        if len(zgodovina) > 4:
+            zgodovina.pop(0)
+
+        self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+        return odgovor
+
+
+def test_system():
+    print("\n🧪 TESTIRANJE DIREKTNEGA JSONL DOSTOPA:")
+    print("=" * 50)
+    
+    zupan = VirtualniZupan()
+    zupan.nalozi_bazo()
+    
+    test_questions = [
+        "mamo v občini zobozdravnika?",
+        "kontakte od zdravnikov",
+        "kdaj je odprti krajevni urad rače",
+        "kaj pa ob ponedeljkih",
+        "kdaj je naslednji odvoz rumene kante pod terasami"
+    ]
+    
+    for i, question in enumerate(test_questions, 1):
+        print(f"\n{i}. {question}")
+        print("-" * 40)
+        
+        answer = zupan.odgovori(question, f"test_{i}")
+        print(answer[:200] + ("..." if len(answer) > 200 else ""))
+
+
+def main():
+    print("\n" + "=" * 60)
+    print("VIRTUALNI ŽUPAN RAČE-FRAM v35.1")
+    print("Končni popravki - direktni JSONL pristop")
+    print("=" * 60)
+
+    zupan = VirtualniZupan()
+    zupan.nalozi_bazo()
+    
+    test_system()
+    
+    print("\n💬 Pripravljen za vprašanja! (vpišite 'konec' za izhod)")
+    print("📊 Statistika: 'stats'\n")
+
+    session_id = f"cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+    print("Pozdravljeni! Sem vaš virtualni župan občine Rače-Fram. Lahko me vprašate karkoli o naši občini - od jedilnikov v šolah do odvoza odpadkov, od kontaktnih podatkov do občinskih storitev. Kako vam lahko pomagam?")
+
+    while True:
+        try:
+            question = input("\n> ").strip()
+
+            if not question:
+                continue
+
+            if question.lower() in ['konec', 'exit', 'quit', 'q']:
+                print("\n👋 Nasvidenje!")
+                break
+
+            if question.lower() == 'stats':
+                print(f"\n📊 STATISTIKE:")
+                print(f" • Session ID: {session_id}")
+                print(f" • Cache entries: {len(zupan.jsonl_cache)}")
+                if zupan.collection:
+                    print(f" • Documents in ChromaDB: {zupan.collection.count()}")
+                continue
+
+            print("\n" + "=" * 60)
+            answer = zupan.odgovori(question, session_id)
+            print(answer)
+            print("=" * 60)
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Prekinitev... Nasvidenje!")
+            break
+        except Exception as e:
+            print(f"\n❌ Napaka: {e}")
+            continue
+
+
+if __name__ == "__main__":
+    main()
