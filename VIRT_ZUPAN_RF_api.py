@@ -1139,7 +1139,23 @@ Samostojno vprašanje:"""
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
             return odgovor
 
-        # LAYER 4: Uradne ure - direktno iz JSONL
+        # LAYER 4: Šolske poizvedbe - OŠ Rače govorilne ure
+        if any(word in vprasanje_lower for word in ["govorilne ure", "govorilnih ur", "govorilne"]) and any(word in vprasanje_lower for word in ["rače", "race"]):
+            print("🏫 ZAZNANO: Govorilne ure OŠ Rače!")
+            odgovor = """**Govorilne ure v OŠ Rače:**
+
+Za govorilne ure v OŠ Rače je **obvezno predhodno spletno naročanje**.
+
+🔗 **Povezava za naročanje:** [Govorilne ure OŠ Rače](https://www.osrace.si/?p=1235)
+
+Prosimo, da se naročite vnaprej preko zgornje povezave."""
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            if len(zgodovina) > 4:
+                zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        # LAYER 5: Uradne ure - direktno iz JSONL
         if any(word in vprasanje_lower for word in ["ura", "odprt", "kdaj odprt", "uradne ure", "krajevni urad"]):
             print("🏢 ZAZNANO: Uradne ure vprašanje - direktno iz JSONL!")
             odgovor = self.get_office_hours_direct(vprasanje_lower)
