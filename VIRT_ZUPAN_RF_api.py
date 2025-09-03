@@ -1,4 +1,41 @@
-import os
+def get_contacts_data_direct(self, query_lower=""):
+        """Direktno pridobi kontaktne podatke iz imenik_zaposlenih_in_ure.jsonl - IZBOLJŠANO"""
+        contacts_data = self.load_jsonl_data("imenik_zaposlenih_in_ure.jsonl")
+        
+        if not contacts_data:
+            return "Žal nimam dostopa do kontaktnih podatkov."
+        
+        # Pametno iskanje po področjih/službah
+        field_keywords = {
+            "telovadnica": ["telovadnica", "šport", "sport", "rekreacija", "dvorana"],
+            "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis"],
+            "turizem": ["turizem", "turistični", "promocija", "prireditve"],
+            "gradnja": ["gradnja", "gradbeni", "dovoljenja", "building"],
+            "okolje": ["okolje", "okoljski", "narava", "varstvo"],
+            "finance": ["finance", "računovodstvo", "proračun", "davki"],
+            "upravljanje": ["upravljanje", "premoženje", "objekti"],
+            "splošno": ["splošno", "sekretariat", "uprava"]
+        }
+        
+        # Poišči katero področje sprašuje
+        relevant_field = None
+        for field, keywords in field_keywords.items():
+            if any(keyword in query_lower for keyword in keywords):
+                relevant_field = field
+                break
+        
+        # Če je specifično področje, išči po vsebini in metadatah
+        if relevant_field:
+            print(f"🎯 Iščem kontakt za področje: {relevant_field}")
+            
+            relevant_contacts = []
+            field_keywords_list = field_keywords[relevant_field]
+            
+            for item in contacts_data:
+                text = item.get("text", "").lower()
+                metadata = item.get("metadata", {})
+                
+                # Išči v besedilu in metadatahimport os
 import json
 import chromadb
 import requests
