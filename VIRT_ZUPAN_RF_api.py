@@ -1,41 +1,5 @@
-def get_contacts_data_direct(self, query_lower=""):
-        """Direktno pridobi kontaktne podatke iz imenik_zaposlenih_in_ure.jsonl - IZBOLJŠANO"""
-        contacts_data = self.load_jsonl_data("imenik_zaposlenih_in_ure.jsonl")
-        
-        if not contacts_data:
-            return "Žal nimam dostopa do kontaktnih podatkov."
-        
-        # Pametno iskanje po področjih/službah
-        field_keywords = {
-            "telovadnica": ["telovadnica", "šport", "sport", "rekreacija", "dvorana"],
-            "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis"],
-            "turizem": ["turizem", "turistični", "promocija", "prireditve"],
-            "gradnja": ["gradnja", "gradbeni", "dovoljenja", "building"],
-            "okolje": ["okolje", "okoljski", "narava", "varstvo"],
-            "finance": ["finance", "računovodstvo", "proračun", "davki"],
-            "upravljanje": ["upravljanje", "premoženje", "objekti"],
-            "splošno": ["splošno", "sekretariat", "uprava"]
-        }
-        
-        # Poišči katero področje sprašuje
-        relevant_field = None
-        for field, keywords in field_keywords.items():
-            if any(keyword in query_lower for keyword in keywords):
-                relevant_field = field
-                break
-        
-        # Če je specifično področje, išči po vsebini in metadatah
-        if relevant_field:
-            print(f"🎯 Iščem kontakt za področje: {relevant_field}")
-            
-            relevant_contacts = []
-            field_keywords_list = field_keywords[relevant_field]
-            
-            for item in contacts_data:
-                text = item.get("text", "").lower()
-                metadata = item.get("metadata", {})
-                
-                # Išči v besedilu in metadatahimport os
+import os
+import sys
 import json
 import chromadb
 import requests
@@ -110,7 +74,6 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
     if a_n == b_n:
         return True
     
-    # DODAJ TA DEL - odstrani generične besede
     generic_words = {"cesta", "ulica", "pot", "trg"}
     
     # Očisti generične besede za primerjanje
@@ -118,32 +81,24 @@ def slovenian_variant_equivalent(a: str, b: str) -> bool:
     b_clean = " ".join(word for word in b_n.split() if word not in generic_words).strip()
     
     known_variants = {
-        # Bistriška cesta variante
         frozenset(["bistriska", "bistriski", "bistriška", "bistriške", "bistriske"]),
-        # Mlinska cesta variante  
         frozenset(["mlinska", "mlinski", "mlinsko", "mlinske"]),
-        # Framska cesta variante
         frozenset(["framska", "framski", "framsko", "framske"]),
-        # Grajski trg variante
         frozenset(["grajski", "grajska", "grajsko", "grajske"]),
-        # Pod terasami variante
         frozenset(["terasami", "terase", "terasa", "terasah"]),
-        # Turnerjeva variante
         frozenset(["turnerjeva", "turnerjevi", "turnerjev"])
     }
     
-    # Preveri če sta obe besedi v istem setu variant (UPORABI OČIŠČENE)
+    # Preveri če sta obe besedi v istem setu variant
     for variant_set in known_variants:
         if a_clean in variant_set and b_clean in variant_set:
             return True
     
     # Splošna fleksijska heuristika - končnice
     if len(a_n) > 3 and len(b_n) > 3:
-        # Če se ujemata v prvih 75% znakov
         min_len = min(len(a_n), len(b_n))
         stem_len = int(min_len * 0.75)
         if a_n[:stem_len] == b_n[:stem_len]:
-            # In končnici sta slovenske
             endings = {"a", "i", "e", "o", "u", "ih", "imi", "ega", "emu"}
             a_end = a_n[stem_len:]
             b_end = b_n[stem_len:]
@@ -177,7 +132,7 @@ def street_phrase_matches(query_phrase: str, street_tok: str, threshold: float =
             return False
     return True
 
-# canonicalne različice tipov odpadkov z možnimi variacijami (razširjene)
+# canonicalne različice tipov odpadkov z možnimi variacijami
 WASTE_TYPE_VARIANTS = {
     "Biološki odpadki": [
         "bioloski odpadki", "bioloskih odpakov", "bioloski", "bioloskih", "bio", "biološki odpadki",
@@ -307,7 +262,6 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
 
     # STRATEGIJA 1: Poskuši iskanje po metadatah
     try:
-        # Poskuši z različnimi formati datuma
         date_formats = [
             target_date.strftime('%Y-%m-%d'),
             target_date.strftime('%d.%m.%Y'),
@@ -345,12 +299,11 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
         for query in search_queries:
             results = collection.query(
                 query_texts=[query],
-                n_results=20,  # Povečaj za boljše iskanje
+                n_results=20,
                 include=["documents", "metadatas"]
             )
             
             if results['documents'] and results['documents'][0]:
-                # STROŽJI FILTER: išči TOČNO iskani datum
                 date_patterns = [
                     target_date.strftime('%d.%m.%Y'),
                     target_date.strftime('%d.%m.'),
@@ -361,7 +314,6 @@ def obravnavaj_jedilnik(vprasanje: str, collection):
                 ]
                 
                 for doc, meta in zip(results['documents'][0], results['metadatas'][0]):
-                    # Preveri ali dokument vsebuje TOČNO iskani datum in šolo
                     doc_contains_school = school.lower() in doc.lower()
                     doc_contains_date = any(pattern in doc for pattern in date_patterns)
                     
@@ -386,7 +338,7 @@ class VirtualniZupan:
         self._nap_access_token = None
         self._nap_token_expiry = None
         
-        # NOVO: Cache za JSONL podatke
+        # Cache za JSONL podatke
         self.jsonl_cache = {}
 
     def nalozi_bazo(self):
@@ -409,7 +361,6 @@ class VirtualniZupan:
         except Exception as e:
             print(f"Napaka pri beleženju pogovora: {e}")
 
-    # NOVO: Direktno branje JSONL datotek
     def load_jsonl_data(self, filename):
         """Direktno preberi JSONL datoteko z cache sistemom"""
         cache_key = filename
@@ -475,7 +426,7 @@ class VirtualniZupan:
         if not doctors:
             return "Žal nisem našel ustreznih zdravstvenih podatkov."
         
-        # KLJUČNA SPREMEMBA: Združi osnovne podatke in urnik za vsakega zdravnika
+        # Združi osnovne podatke in urnik za vsakega zdravnika
         doctor_profiles = {}
         
         for item in doctors:
@@ -485,31 +436,27 @@ class VirtualniZupan:
             # Izvleci ime zdravnika
             doctor_name = None
             
-            # Različni vzorci za iskanje imen
             patterns = [
-                r'Dr\.\s+([^,\.]+(?:\s+[^,\.]+)*)',  # Dr. Ime Priimek
-                r'mag\.\s*sci\.\s+([^,\.]+(?:\s+[^,\.]+)*)',  # mag. sci. Ime Priimek
-                r'doktor[ai]ca?\s+([^,\.]+(?:\s+[^,\.]+)*)'  # doktorica Ime Priimek
+                r'Dr\.\s+([^,\.]+(?:\s+[^,\.]+)*)',
+                r'mag\.\s*sci\.\s+([^,\.]+(?:\s+[^,\.]+)*)',
+                r'doktor[ai]ca?\s+([^,\.]+(?:\s+[^,\.]+)*)'
             ]
             
             for pattern in patterns:
                 match = re.search(pattern, text, re.IGNORECASE)
                 if match:
                     doctor_name = match.group(1).strip()
-                    # Počisti ime - odstrani oklepaje in dodatne informacije
                     doctor_name = re.sub(r'\s*\([^)]*\).*', '', doctor_name)
                     doctor_name = re.sub(r'\s*,.*', '', doctor_name)
                     break
             
-            # Če ni najden iz besedila, poskusi iz metadata
             if not doctor_name:
                 doctor_name = metadata.get("zdravnik") or metadata.get("oseba")
             
             if doctor_name:
-                # NOVO: Preveri če je že v profilih - ne dodaj duplikata
+                # Preveri če je že v profilih - ne dodaj duplikata
                 existing_profile = None
                 for existing_name in doctor_profiles.keys():
-                    # Fuzzy match za ime (lahko je zapisano nekoliko različno)
                     if (normalize_text(doctor_name) in normalize_text(existing_name) or 
                         normalize_text(existing_name) in normalize_text(doctor_name) or
                         SequenceMatcher(None, normalize_text(doctor_name), normalize_text(existing_name)).ratio() > 0.85):
@@ -517,7 +464,6 @@ class VirtualniZupan:
                         break
                 
                 if existing_profile:
-                    # Samo dodaj urnik če ga še nima
                     if metadata.get('tip') == 'urnik' and not doctor_profiles[existing_profile].get('urnik'):
                         doctor_profiles[existing_profile]['urnik'] = text
                     continue
@@ -538,7 +484,7 @@ class VirtualniZupan:
                 
                 # Ekstraktiranje kontaktnih podatkov samo iz osnovnih podatkov
                 if metadata.get('tip') != 'urnik':
-                    # Telefon - popoln telefon
+                    # Telefon
                     telefon_match = re.search(r'Telefon:\s*([0-9\/\-\s]+)', text)
                     if telefon_match:
                         profile['telefon'] = telefon_match.group(1).strip()
@@ -610,124 +556,6 @@ class VirtualniZupan:
             response += "\n"
         
         response += "Za aktualne informacije o razpoložljivosti pokličite direktno na navedene številke."
-        return response
-
-    def get_contacts_data_direct(self, query_lower=""):
-        """Direktno pridobi kontaktne podatke iz imenik_zaposlenih_in_ure.jsonl - PAMETNO ISKANJE PO PODROČJIH"""
-        contacts_data = self.load_jsonl_data("imenik_zaposlenih_in_ure.jsonl")
-        
-        if not contacts_data:
-            return "Žal nimam dostopa do kontaktnih podatkov."
-        
-        # Pametno mapiranje vprašanj na področja dela
-        field_mapping = {
-            # Šport in rekreacija
-            "sport": ["telovadnica", "dvorana", "šport", "sport", "rekreacija", "atletika", "nogomet", "košarka"],
-            
-            # Kmetijstvo
-            "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis", "poljedelstvo", "živinoreja"],
-            
-            # Turizem
-            "turizem": ["turizem", "turistični", "promocija", "prireditve", "gostinstvo", "nastanitev"],
-            
-            # Gradnja in prostor
-            "gradnja": ["gradnja", "gradbeni", "dovoljenja", "gradnje", "prostorski", "urbanizem", "objekti"],
-            
-            # Okolje
-            "okolje": ["okolje", "okoljski", "narava", "varstvo", "odpadki", "energija"],
-            
-            # Finance
-            "finance": ["finance", "računovodstvo", "proračun", "davki", "plače", "knjiženje"],
-            
-            # Premoženje
-            "premozenje": ["premoženje", "upravljanje", "objekti", "nepremičnine", "najemnine"],
-            
-            # Splošno upravljanje
-            "splošno": ["splošno", "sekretariat", "uprava", "administracija"]
-        }
-        
-        # Poišči katero področje uporabnik sprašuje
-        detected_field = None
-        for field, keywords in field_mapping.items():
-            if any(keyword in query_lower for keyword in keywords):
-                detected_field = field
-                print(f"🎯 Zaznano področje: {detected_field} za vprašanje: '{query_lower}'")
-                break
-        
-        if detected_field:
-            # Išči po vsebini dokumentov kontaktno osebo za to področje
-            relevant_contacts = []
-            search_keywords = field_mapping[detected_field]
-            
-            for item in contacts_data:
-                text = item.get("text", "").lower()
-                metadata = item.get("metadata", {})
-                
-                # Išči ujemanja v opisu dela/področju
-                text_matches = sum(1 for keyword in search_keywords if keyword in text)
-                
-                # Posebej preveri metapodatke
-                category = metadata.get("kategorija", "").lower()
-                area = metadata.get("obmocje", "").lower() 
-                job_desc = metadata.get("opis", "").lower()
-                
-                metadata_matches = sum(1 for keyword in search_keywords 
-                                     if keyword in category or keyword in area or keyword in job_desc)
-                
-                total_matches = text_matches + metadata_matches
-                
-                if total_matches > 0:
-                    # Ekstraktiranje imena in kontaktov
-                    name_match = re.search(r'([A-ŽŠĐČĆŽ][a-žšđčćž]+(?:\s+[A-ŽŠĐČĆŽ][a-žšđčćž]+)*)', text)
-                    phone_match = re.search(r'(\d{2}[/\s-]*\d{3}[/\s-]*\d{2}[/\s-]*\d{2})', text)
-                    email_match = re.search(r'([a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text)
-                    
-                    contact_info = {
-                        'name': name_match.group(1) if name_match else "Neznano ime",
-                        'phone': phone_match.group(1) if phone_match else None,
-                        'email': email_match.group(1) if email_match else None,
-                        'text': text,
-                        'matches': total_matches,
-                        'metadata': metadata
-                    }
-                    
-                    relevant_contacts.append(contact_info)
-            
-            # Razvrsti po številu ujemanj
-            relevant_contacts.sort(key=lambda x: x['matches'], reverse=True)
-            
-            if relevant_contacts:
-                # Vrni najbolje ujemajoče se kontakte
-                response = f"**Kontaktna oseba za {detected_field}:**\n\n"
-                
-                for contact in relevant_contacts[:2]:  # Največ 2 kontakta
-                    response += f"**{contact['name']}**\n"
-                    
-                    if contact['phone']:
-                        response += f"- Telefon: {contact['phone']}\n"
-                    if contact['email']:
-                        response += f"- E-pošta: {contact['email']}\n"
-                    
-                    # Dodaj opis dela če je v metadatah
-                    if contact['metadata'].get('opis'):
-                        response += f"- Področje: {contact['metadata']['opis']}\n"
-                    
-                    response += "\n"
-                
-                return response.strip()
-            
-            else:
-                return f"Žal nisem našel specifičnega kontakta za področje **{detected_field}**.\n\nZa splošne informacije se obrnite na občino:\n📞 02 609 60 10\n📧 obcina@race-fram.si"
-        
-        # Če ni specificno področje, vrni splošne kontakte
-        response = "**Splošni kontaktni podatki Občine Rače-Fram:**\n\n"
-        
-        for item in contacts_data:
-            text = item.get("text", "")
-            if any(word in text.lower() for word in ["telefon", "email", "naslov", "direktorica", "splošno"]):
-                response += f"• {text}\n"
-        
-        response += "\n**Za specifične poizvedbe navedite področje dela (npr. šport, kmetijstvo, turizem).**"
         return response
 
     def get_office_hours_direct(self, query_lower=""):
@@ -1264,112 +1092,6 @@ Samostojno vprašanje:"""
             self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
             return odgovor
 
-        # LAYER 3: Kontaktni pristop - direktno iz JSONL (IZBOLJŠANO)
-        if any(word in vprasanje_lower for word in ["kontakt", "kontaktiram", "koga", "kdo je odgovoren", "telefon", "mail", "email", "naslov", "zaposleni", "direktor"]):
-            print("📞 ZAZNANO: Kontaktno vprašanje - direktno iz JSONL!")
-            
-            # Dodatno iskanje specifičnih področij
-            field_keywords = {
-                "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis", "poljedelstvo", "agronomija"],
-                "sport": ["telovadnica", "dvorana", "šport", "sport", "rekreacija", "atletika", "športni objekti"],
-                "turizem": ["turizem", "turistični", "promocija", "prireditve", "gostinstvo"],
-                "gradnja": ["gradnja", "gradbeni", "dovoljenja", "investicije", "objekti", "infrastruktura"],
-                "finance": ["finance", "računovodstvo", "proračun", "davki", "plače"],
-                "pravno": ["pravne", "pravni", "pogodbe", "javna naročila", "kadrovsko"],
-                "sociala": ["šolstvo", "zdravstvo", "socialno", "varstvo", "dijaki", "študenti"]
-            }
-            
-            # Prepoznaj področje
-            detected_field = None
-            for field, keywords in field_keywords.items():
-                if any(keyword in vprasanje_lower for keyword in keywords):
-                    detected_field = field
-                    break
-            
-            if detected_field:
-                print(f"🎯 Zaznano specifično področje: {detected_field}")
-                
-                # Direktno mapiranje na odgovorne osebe
-                field_contacts = {
-                    "kmetijstvo": {
-                        "name": "Tanja Kosi", 
-                        "email": "tanja.kosi@race-fram.si",
-                        "description": "diplomirana inženirka agronomije, pristojna za kmetijstvo, zaščito okolja in turizem"
-                    },
-                    "sport": {
-                        "name": "Klaudia Sovdat", 
-                        "email": "klaudia.sovdat@race-fram.si",
-                        "description": "referentka za področje športa, pripravlja letne programe športa in upravlja s športnimi objekti"
-                    },
-                    "turizem": {
-                        "name": "Tanja Kosi", 
-                        "email": "tanja.kosi@race-fram.si",
-                        "description": "pristojna za turizem in promocijo občine"
-                    },
-                    "gradnja": {
-                        "name": "Mateja Frešer", 
-                        "email": "mateja.freser@race-fram.si",
-                        "description": "diplomirana inženirka gradbeništva, vodi občinske investicije"
-                    },
-                    "finance": {
-                        "name": "Rosvita Robar", 
-                        "email": "rosvita.robar@race-fram.si",
-                        "description": "magistra ekonomskih ved, skrbi za proračun in finance"
-                    },
-                    "pravno": {
-                        "name": "Anja Čelan", 
-                        "email": "anja.celan@race-fram.si",
-                        "description": "univerzitetna diplomirana pravnica, javna naročila in pogodbe"
-                    },
-                    "sociala": {
-                        "name": "Monika Skledar", 
-                        "email": "monika.skledar@race-fram.si",
-                        "description": "izvaja postopke na področju šolstva, zdravstva in socialnega varstva"
-                    }
-                }
-                
-                if detected_field in field_contacts:
-                    contact = field_contacts[detected_field]
-                    odgovor = f"""**Kontaktna oseba za {detected_field}:**
-
-**{contact['name']}**
-📧 E-pošta: {contact['email']}
-📞 Telefon: 02 609 60 10
-
-_{contact['description']}_
-
-Za direkten kontakt pokličite glavno številko občine in prosite za povezavo z {contact['name']}."""
-                    
-                    zgodovina.append((uporabnikovo_vprasanje, odgovor))
-                    if len(zgodovina) > 4:
-                        zgodovina.pop(0)
-                    self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-                    return odgovor
-            
-            # Če ni specifično področje, vrni splošne kontakte
-            odgovor = self.get_contacts_data_direct(vprasanje_lower)
-            zgodovina.append((uporabnikovo_vprasanje, odgovor))
-            if len(zgodovina) > 4:
-                zgodovina.pop(0)
-            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-            return odgovor
-
-        # LAYER 4: Šolske poizvedbe - OŠ Rače govorilne ure
-        if any(word in vprasanje_lower for word in ["govorilne ure", "govorilnih ur", "govorilne"]) and any(word in vprasanje_lower for word in ["rače", "race"]):
-            print("🏫 ZAZNANO: Govorilne ure OŠ Rače!")
-            odgovor = """**Govorilne ure v OŠ Rače:**
-
-Za govorilne ure v OŠ Rače je **obvezno predhodno spletno naročanje**.
-
-🔗 **Povezava za naročanje:** [Govorilne ure OŠ Rače](https://www.osrace.si/?p=1235)
-
-Prosimo, da se naročite vnaprej preko zgornje povezave."""
-            zgodovina.append((uporabnikovo_vprasanje, odgovor))
-            if len(zgodovina) > 4:
-                zgodovina.pop(0)
-            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
-            return odgovor
-
         # LAYER 5: Uradne ure - direktno iz JSONL
         if any(word in vprasanje_lower for word in ["ura", "odprt", "kdaj odprt", "uradne ure", "krajevni urad"]):
             print("🏢 ZAZNANO: Uradne ure vprašanje - direktno iz JSONL!")
@@ -1419,7 +1141,7 @@ Prosimo, da se naročite vnaprej preko zgornje povezave."""
             prompt_za_llm = (
                 f"Ti si 'Virtualni župan občine Rače-Fram'.\n"
                 f"DIREKTIVA #1 (VAROVALKA ZA DATUME): Današnji datum je {now.strftime('%d.%m.%Y')}. Če je podatek iz leta, ki je manjše od {now.year}, ga IGNORIRAJ.\n"
-                "DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)***.\n"
+                "DIREKTIVA #2 (OBLIKOVANJE): Odgovor mora biti pregleden. Ključne informacije **poudari**. Kjer naštevaš, **uporabi alineje (-)**.\n"
                 "DIREKTIVA #3 (POVEZAVE): Če najdeš URL, ga MORAŠ vključiti v klikljivi obliki: [Ime vira](URL).\n"
                 "DIREKTIVA #4 (SPECIFIČNOST): Če ne najdeš specifičnega podatka (npr. 'kontakt'), NE ponavljaj splošnih informacij. Raje reci: \"Žal nimam specifičnega kontakta za to temo.\"\n\n"
                 f"--- KONTEKST ---\n{kontekst_baza}---\n"
@@ -1541,3 +1263,111 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+        # LAYER 3: Kontaktni pristop - direktno iz JSONL (IZBOLJŠANO)
+        if any(word in vprasanje_lower for word in ["kontakt", "kontaktiram", "koga", "kdo je odgovoren", "telefon", "mail", "email", "naslov", "zaposleni", "direktor"]):
+            print("📞 ZAZNANO: Kontaktno vprašanje - direktno iz JSONL!")
+            
+            # Dodatno iskanje specifičnih področij
+            field_keywords = {
+                "kmetijstvo": ["kmetijstvo", "kmetijski", "kmet", "subvencije", "razpis", "poljedelstvo", "agronomija"],
+                "sport": ["telovadnica", "dvorana", "šport", "sport", "rekreacija", "atletika", "športni objekti"],
+                "turizem": ["turizem", "turistični", "promocija", "prireditve", "gostinstvo"],
+                "gradnja": ["gradnja", "gradbeni", "dovoljenja", "investicije", "objekti", "infrastruktura"],
+                "finance": ["finance", "računovodstvo", "proračun", "davki", "plače"],
+                "pravno": ["pravne", "pravni", "pogodbe", "javna naročila", "kadrovsko"],
+                "sociala": ["šolstvo", "zdravstvo", "socialno", "varstvo", "dijaki", "študenti"]
+            }
+            
+            # Prepoznaj področje
+            detected_field = None
+            for field, keywords in field_keywords.items():
+                if any(keyword in vprasanje_lower for keyword in keywords):
+                    detected_field = field
+                    break
+            
+            if detected_field:
+                print(f"🎯 Zaznano specifično področje: {detected_field}")
+                
+                # Direktno mapiranje na odgovorne osebe
+                field_contacts = {
+                    "kmetijstvo": {
+                        "name": "Tanja Kosi", 
+                        "email": "tanja.kosi@race-fram.si",
+                        "description": "diplomirana inženirka agronomije, pristojna za kmetijstvo, zaščito okolja in turizem"
+                    },
+                    "sport": {
+                        "name": "Klaudia Sovdat", 
+                        "email": "klaudia.sovdat@race-fram.si",
+                        "description": "referentka za področje športa, pripravlja letne programe športa in upravlja s športnimi objekti"
+                    },
+                    "turizem": {
+                        "name": "Tanja Kosi", 
+                        "email": "tanja.kosi@race-fram.si",
+                        "description": "pristojna za turizem in promocijo občine"
+                    },
+                    "gradnja": {
+                        "name": "Mateja Frešer", 
+                        "email": "mateja.freser@race-fram.si",
+                        "description": "diplomirana inženirka gradbeništva, vodi občinske investicije"
+                    },
+                    "finance": {
+                        "name": "Rosvita Robar", 
+                        "email": "rosvita.robar@race-fram.si",
+                        "description": "magistra ekonomskih ved, skrbi za proračun in finance"
+                    },
+                    "pravno": {
+                        "name": "Anja Čelan", 
+                        "email": "anja.celan@race-fram.si",
+                        "description": "univerzitetna diplomirana pravnica, javna naročila in pogodbe"
+                    },
+                    "sociala": {
+                        "name": "Monika Skledar", 
+                        "email": "monika.skledar@race-fram.si",
+                        "description": "izvaja postopke na področju šolstva, zdravstva in socialnega varstva"
+                    }
+                }
+                
+                if detected_field in field_contacts:
+                    contact = field_contacts[detected_field]
+                    odgovor = f"""**Kontaktna oseba za {detected_field}:**
+
+**{contact['name']}**
+📧 E-pošta: {contact['email']}
+📞 Telefon: 02 609 60 10
+
+_{contact['description']}_
+
+Za direkten kontakt pokličite glavno številko občine in prosite za povezavo z {contact['name']}."""
+                    
+                    zgodovina.append((uporabnikovo_vprasanje, odgovor))
+                    if len(zgodovina) > 4:
+                        zgodovina.pop(0)
+                    self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+                    return odgovor
+            
+            # Če ni specifično področje, vrni splošne kontakte
+            odgovor = """**Splošni kontaktni podatki Občine Rače-Fram:**
+
+📞 **Telefon:** 02 609 60 10
+📧 **E-pošta:** obcina@race-fram.si
+📍 **Naslov:** Grajski trg 14, 2327 Rače
+
+**Za specifične poizvedbe navedite področje dela (npr. šport, kmetijstvo, turizem).**"""
+            
+            zgodovina.append((uporabnikovo_vprasanje, odgovor))
+            if len(zgodovina) > 4:
+                zgodovina.pop(0)
+            self.belezi_pogovor(session_id, uporabnikovo_vprasanje, odgovor)
+            return odgovor
+
+        # LAYER 4: Šolske poizvedbe - OŠ Rače govorilne ure
+        if any(word in vprasanje_lower for word in ["govorilne ure", "govorilnih ur", "govorilne"]) and any(word in vprasanje_lower for word in ["rače", "race"]):
+            print("🏫 ZAZNANO: Govorilne ure OŠ Rače!")
+            odgovor = """**Govorilne ure v OŠ Rače:**
+
+Za govorilne ure v OŠ Rače je **obvezno predhodno spletno naročanje**.
+
+🔗 **Povezava za naročanje:** [Govorilne ure OŠ Rače](https://www.osrace.si/?p=1235)
+
+Prosimo, da se naročite vnaprej preko zgornje povezave."""
