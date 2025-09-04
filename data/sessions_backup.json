@@ -1,0 +1,91 @@
+{
+  "test_1": {
+    "zgodovina": [
+      [
+        "Koliko prebivalcev ima občina?",
+        "**Nimam podatka** o številu prebivalcev občine Rače-Fram."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "splosno",
+    "last_activity": "2025-09-04T06:16:31.030272"
+  },
+  "test_2": {
+    "zgodovina": [
+      [
+        "Kdo je direktor občinske uprave?",
+        "Žal nimam dostopa do kontaktnih podatkov."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "kontakti",
+    "last_activity": "2025-09-04T06:16:31.030283"
+  },
+  "test_3": {
+    "zgodovina": [
+      [
+        "Ali imamo v občini zobozdravnika?",
+        "Žal nimam dostopa do podatkov o zdravnikih."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "zdravstvo",
+    "last_activity": "2025-09-04T06:16:31.030287"
+  },
+  "test_4": {
+    "zgodovina": [
+      [
+        "Kdaj so govorilne ure v OŠ Rače?",
+        "**Govorilne ure v OŠ Rače:**\n\nZa govorilne ure v OŠ Rače je **obvezno predhodno spletno naročanje**.\n\n🔗 **Povezava za naročanje:** [Govorilne ure OŠ Rače](https://www.osrace.si/?p=1235)\n\nProsimo, da se naročite vnaprej preko zgornje povezave."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "solstvo",
+    "last_activity": "2025-09-04T06:16:31.030290"
+  },
+  "test_5": {
+    "zgodovina": [
+      [
+        "Kakšno je stanje prometa?",
+        "🚗 **Promet v občini Rače-Fram** _(posodobljeno: 04.09.2025 06:15)_\n\n**A1-E57, Maribor - Ljubljana**\nA1, Maribor - Ljubljana, priključek Fram - priključek Sl. Bistrica sever v smeri Ljubljane, dela, promet poteka po dveh zoženih pasovih.\n\n**G1-2, Šikole - Hajdina**\nG1-2, Slovenska Bistrica - Ptuj, pri odcepu za Rače, dela, izmenično enosmerni promet, do 28. 9. 2025.\n\n**R3-711, Rače - Kungota - Kidričevo**\nR3-711, Rače - Kungota - Kidričevo, v Brunšviku, izmenično enosmerni promet, rekonstrukcija ceste, do 15. 3. 2026.\n\n_Vir: NAP / promet.si_"
+      ]
+    ],
+    "stanje": {},
+    "question_type": "promet",
+    "last_activity": "2025-09-04T06:16:31.030293"
+  },
+  "test_6": {
+    "zgodovina": [
+      [
+        "Koga kontaktiram za kmetijski razpis?",
+        "Žal nimam dostopa do kontaktnih podatkov."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "kontakti",
+    "last_activity": "2025-09-04T06:16:31.030296"
+  },
+  "cli_20250904_061522": {
+    "zgodovina": [
+      [
+        "kdaj je odvoz stekla iz bistriske",
+        "Našel sem podatke o odvozu, vendar niso iz trenutnega leta. Za aktualne informacije pokličite 02 609 60 10."
+      ],
+      [
+        "kdo je župan občine",
+        "**Nimam** podatka o trenutnem županu občine Bistrica."
+      ],
+      [
+        "ali imamo v občini kakšno zaporo",
+        "🚗 **Promet v občini Rače-Fram** _(posodobljeno: 04.09.2025 06:16)_\n\n**A1-E57, Maribor - Ljubljana**\nA1, Maribor - Ljubljana, priključek Fram - priključek Sl. Bistrica sever v smeri Ljubljane, dela, promet poteka po dveh zoženih pasovih.\n\n**G1-2, Šikole - Hajdina**\nG1-2, Slovenska Bistrica - Ptuj, pri odcepu za Rače, dela, izmenično enosmerni promet, do 28. 9. 2025.\n\n**R3-711, Rače - Kungota - Kidričevo**\nR3-711, Rače - Kungota - Kidričevo, v Brunšviku, izmenično enosmerni promet, rekonstrukcija ceste, do 15. 3. 2026.\n\n_Vir: NAP / promet.si_"
+      ],
+      [
+        "kdaj je odvoz steklan na mlinski",
+        "Našel sem podatke o odvozu, vendar niso iz trenutnega leta. Za aktualne informacije pokličite 02 609 60 10."
+      ]
+    ],
+    "stanje": {},
+    "question_type": "odpadki",
+    "last_activity": "2025-09-04T06:16:31.030299"
+  }
+}
